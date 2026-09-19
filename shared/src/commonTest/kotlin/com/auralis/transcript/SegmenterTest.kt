@@ -38,6 +38,16 @@ class SegmenterTest {
     }
 
     @Test
+    fun duplicateTokenIdsAreIgnored() {
+        val s = Segmenter()
+        val first = newToken("Hello.", 0, 200, true, id = "tok-demo-0")
+        s.ingest(listOf(first))
+        s.ingest(listOf(first.copy(text = "Hello.")))
+        assertEquals(1, s.snapshot().finalTokens.size)
+        assertEquals(1, s.snapshot().segments.filter { it.isFinal }.size)
+    }
+
+    @Test
     fun chineseDoesNotInsertSpaces() {
         val s = Segmenter()
         s.ingest(

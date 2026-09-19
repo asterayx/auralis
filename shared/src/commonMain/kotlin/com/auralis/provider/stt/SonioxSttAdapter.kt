@@ -171,7 +171,7 @@ class SonioxSttAdapter(
                 return
             }
             if (obj["finished"]?.jsonPrimitive?.booleanOrNull == true) {
-                _events.emit(SttEvent.Closed("finished"))
+                _events.emit(SttEvent.Closed("finished", expected = true))
                 return
             }
             val tokens = (obj["tokens"] as? JsonArray)?.mapNotNull { el ->

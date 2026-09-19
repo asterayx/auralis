@@ -21,6 +21,15 @@ class AudioAndVadTest {
     }
 
     @Test
+    fun wavRoundTripKeepsDuration() {
+        val pcm = ByteArray(32_000) { 1 }
+        val wav = Pcm.toWav(pcm, 16_000)
+        assertTrue(Pcm.isWav(wav))
+        assertEquals(1_000, Pcm.durationMs(Pcm.pcmFromContainer(wav)))
+        assertEquals(32_000, Pcm.byteOffset(1_000))
+    }
+
+    @Test
     fun energyVadDetectsSpeechAndHangover() {
         val vad = EnergyVad(rmsThreshold = 100.0, hangoverChunks = 2)
         val loud = AudioChunk(tone(2000, 4000), capturedAtMs = 0, streamOffsetMs = 0)

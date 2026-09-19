@@ -91,6 +91,7 @@ class SessionPipeline(
     private var reconnects = 0
     private var lastSentOffset = 0L
     private var usingFallback = false
+    private var stopping = false
     private val translatedIds = mutableSetOf<String>()
     private val nativeByTime = mutableListOf<TranscriptToken>()
 
@@ -131,7 +132,25 @@ class SessionPipeline(
         }
     }
 
+    suspend fun abandon() {
+        stopping = true
+        runCatching { session?.close() }
+        collector?.cancel()
+        _state.update {
+            it.copy(
+                connected = false,
+                statusMessage = "断网录音已保存，联网后自动补转写。",
+                session = it.session.copy(
+                    status = SessionStatus.OFFLINE_PENDING,
+                    updatedAtMs = clock.nowMs(),
+                    audioDurationMs = it.audioMs,
+                ),
+            )
+        }
+    }
+
     suspend fun stop() {
+        stopping = true
         session?.finalizeUtterance()
         session?.close()
         collector?.cancel()
@@ -213,7 +232,8 @@ class SessionPipeline(
                 is SttEvent.SpeechEnded -> Unit
                 is SttEvent.Closed -> {
                     _state.update { it.copy(connected = false) }
-                    if (_state.value.session.status == SessionStatus.RECORDING) {
+                    val live = _state.value.session.status == SessionStatus.RECORDING
+                    if (!stopping && !event.expected && live) {
                         recover(event.reason ?: "closed")
                     }
                 }

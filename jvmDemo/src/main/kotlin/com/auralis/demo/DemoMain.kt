@@ -30,7 +30,8 @@ private fun runCli() = runBlocking {
 
     val pipeline = app.startLive(SessionMode.TRANSLATOR)
     repeat(40) { i ->
-        pipeline.pushAudio(
+        app.feed(
+            pipeline,
             AudioChunk(
                 pcm16le = ByteArray(3200),
                 capturedAtMs = System.currentTimeMillis(),
