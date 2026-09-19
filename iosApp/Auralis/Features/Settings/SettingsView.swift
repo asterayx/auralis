@@ -236,7 +236,9 @@ struct SettingsView: View {
         store.modelName = item.model
         key = ""
         keyConfigured = item.configured
-        store.modelCandidates = store.modelCandidates.filter { !$0.isEmpty }
+        store.modelCandidates = []
+        store.keyProbeStatus = nil
+        store.keyProbeOk = nil
         if item.configured {
             store.scheduleModelProbe(endpointId: id, key: "")
         }

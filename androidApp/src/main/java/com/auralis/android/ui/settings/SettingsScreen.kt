@@ -161,7 +161,15 @@ fun SettingsScreen(app: AuralisApp, modifier: Modifier = Modifier) {
         keyEndpoints.forEach { ep ->
             FilterChip(
                 selected = selected == ep.id,
-                onClick = { selected = ep.id },
+                onClick = {
+                    selected = ep.id
+                    keyDraft = ""
+                    baseUrl = ep.baseUrl
+                    model = ep.model
+                    modelCandidates = emptyList()
+                    status = null
+                    statusOk = null
+                },
                 label = { Text(ep.displayName) },
             )
         }
