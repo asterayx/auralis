@@ -1,0 +1,34 @@
+# Codemagic provides its own macOS/Xcode builders.
+# Connect this repo in https://codemagic.io and add the same signing files
+# (certificate + provisioning profile + team id) in the UI.
+workflows:
+  auralis-ios-ipa:
+    name: Auralis iOS IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: latest
+      vars:
+        BUNDLE_ID: com.auralis.app
+    triggering:
+      events:
+        - push
+      cancel_previous_builds: true
+    scripts:
+      - name: Generate Xcode project
+        script: |
+          brew install xcodegen
+          cd iosApp && xcodegen generate
+      - name: Build IPA
+        script: |
+          export DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:?set Team ID in Codemagic environment}"
+          export IOS_EXPORT_METHOD="${IOS_EXPORT_METHOD:-development}"
+          bash iosApp/ci/build-ipa.sh
+      - name: Upload TestFlight
+        script: |
+          if [ "${UPLOAD_TESTFLIGHT:-false}" = "true" ]; then
+            bash iosApp/ci/upload-testflight.sh
+          fi
+    artifacts:
+      - dist/ios/*.ipa
+      - dist/ios/*.xcarchive

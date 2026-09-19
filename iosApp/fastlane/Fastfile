@@ -1,0 +1,50 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Generate Xcode project and export a signed IPA"
+  lane :ipa do |options|
+    method = options[:export_method] || ENV["IOS_EXPORT_METHOD"] || "development"
+    output = options[:output] || File.expand_path("../../dist/ios", __dir__)
+    FileUtils.mkdir_p(output)
+
+    Dir.chdir("..") do
+      sh("xcodegen generate")
+    end
+
+    build_app(
+      project: File.expand_path("../Auralis.xcodeproj", __dir__),
+      scheme: "Auralis",
+      sdk: "iphoneos",
+      destination: "generic/platform=iOS",
+      clean: true,
+      export_method: method,
+      output_directory: output,
+      output_name: "Auralis.ipa",
+      xcargs: "DEVELOPMENT_TEAM='#{ENV.fetch("DEVELOPMENT_TEAM")}' CURRENT_PROJECT_VERSION='#{ENV.fetch("GITHUB_RUN_NUMBER", "1")}'",
+    )
+  end
+
+  desc "Upload an existing App Store IPA to TestFlight"
+  lane :testflight_upload do |options|
+    ipa = options[:ipa] || File.expand_path("../../dist/ios/Auralis.ipa", __dir__)
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APP_STORE_CONNECT_KEY_ID"),
+      issuer_id: ENV.fetch("APP_STORE_CONNECT_ISSUER_ID"),
+      key_content: ENV.fetch("APP_STORE_CONNECT_API_KEY_P8"),
+      is_key_content_base64: !ENV.fetch("APP_STORE_CONNECT_API_KEY_P8").include?("BEGIN PRIVATE KEY"),
+    )
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      changelog: ENV["TESTFLIGHT_CHANGELOG"] || "Auralis BYOK scribe build",
+    )
+  end
+
+  desc "Archive with App Store signing and upload to TestFlight"
+  lane :beta do
+    ipa(export_method: "app-store")
+    testflight_upload
+  end
+end
