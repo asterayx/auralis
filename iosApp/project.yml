@@ -9,7 +9,8 @@ settings:
   base:
     PRODUCT_NAME: Auralis
     SWIFT_VERSION: "5.9"
-    GENERATE_INFOPLIST_FILE: NO
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_EXPAND_BUILD_SETTINGS: YES
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1.0
     DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
@@ -25,6 +26,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.auralis.app
         INFOPLIST_FILE: Auralis/Resources/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Auralis
+        INFOPLIST_KEY_LSRequiresIPhoneOS: YES
         CODE_SIGN_ENTITLEMENTS: Auralis/Resources/Auralis-iOS.entitlements
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -41,7 +44,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.auralis.app.macos
-        INFOPLIST_FILE: Auralis/Resources/Info.plist
+        INFOPLIST_FILE: Auralis/Resources/Info-macOS.plist
         CODE_SIGN_ENTITLEMENTS: Auralis/Resources/Auralis.entitlements
         CODE_SIGN_STYLE: Automatic
     scheme:
