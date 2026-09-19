@@ -77,7 +77,7 @@ object TranscriptExporter {
         }
     }
 
-    internal fun ts(ms: Long, vtt: Boolean): String {
+    fun ts(ms: Long, vtt: Boolean): String {
         val clamped = ms.coerceAtLeast(0)
         val hours = clamped / 3_600_000
         val minutes = (clamped % 3_600_000) / 60_000
@@ -91,3 +91,6 @@ object TranscriptExporter {
 fun SessionBundle.seekSegment(atMs: Long): TranscriptSegment? =
     segments.filter { it.isFinal }.lastOrNull { it.startMs <= atMs && atMs <= it.endMs }
         ?: segments.filter { it.isFinal }.minByOrNull { kotlin.math.abs(it.startMs - atMs) }
+
+/** STT-4: format a caption timestamp for "click text → jump to audio". */
+fun formatTimestamp(ms: Long): String = TranscriptExporter.ts(ms, vtt = false).dropLast(4)

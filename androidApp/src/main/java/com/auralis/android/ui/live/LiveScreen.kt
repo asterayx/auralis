@@ -26,10 +26,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.auralis.app.AuralisApp
 import com.auralis.model.SessionMode
 import com.auralis.model.TranslationLayout
@@ -41,11 +48,18 @@ import kotlinx.coroutines.launch
 @Composable
 fun LiveScreen(app: AuralisApp, mode: SessionMode, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val settings by app.settings.collectAsState()
     var pipeline by remember { mutableStateOf<SessionPipeline?>(null) }
     val live = pipeline?.state?.collectAsState()
     var focusedId by remember { mutableStateOf<String?>(null) }
     val lines = live?.value?.let { LiveSync.lines(it.segments, it.translations, it.speakers) }.orEmpty()
+    val startLive = {
+        scope.launch { pipeline = app.startLive(mode) }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startLive()
+    }
     LaunchedEffect(live?.value?.focusedSegmentId) {
         focusedId = live?.value?.focusedSegmentId ?: focusedId
     }
@@ -63,7 +77,9 @@ fun LiveScreen(app: AuralisApp, mode: SessionMode, modifier: Modifier = Modifier
         live?.value?.statusMessage?.let { Text(it) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                scope.launch { pipeline = app.startLive(mode) }
+                val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+                if (granted) startLive() else permission.launch(Manifest.permission.RECORD_AUDIO)
             }) { Text("开始") }
             Button(onClick = {
                 scope.launch {
@@ -100,6 +116,7 @@ fun LiveScreen(app: AuralisApp, mode: SessionMode, modifier: Modifier = Modifier
                     lines = lines,
                     focusedId = focusedId,
                     showTranslation = false,
+                    fontScale = settings.fontScale,
                     modifier = Modifier.weight(1f).verticalScroll(scroll),
                     onFocus = { focusedId = it },
                 )
@@ -108,6 +125,7 @@ fun LiveScreen(app: AuralisApp, mode: SessionMode, modifier: Modifier = Modifier
                     lines = lines,
                     focusedId = focusedId,
                     showTranslation = true,
+                    fontScale = settings.fontScale,
                     modifier = Modifier.weight(1f).verticalScroll(scroll),
                     onFocus = { focusedId = it },
                 )
@@ -119,11 +137,17 @@ fun LiveScreen(app: AuralisApp, mode: SessionMode, modifier: Modifier = Modifier
                         line = line,
                         focused = line.segment.id == focusedId,
                         showTranslation = mode == SessionMode.TRANSLATOR,
+                        fontScale = settings.fontScale,
                         onClick = { focusedId = line.segment.id },
                     )
                 }
                 live?.value?.interimText?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, color = Color(0xFF9AA3B5), modifier = Modifier.padding(top = 8.dp))
+                    Text(
+                        it,
+                        color = Color(0xFF9AA3B5),
+                        fontSize = (18 * settings.fontScale).sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
                 }
             }
         }
@@ -169,6 +193,7 @@ private fun CaptionColumn(
     lines: List<SyncedCaption>,
     focusedId: String?,
     showTranslation: Boolean,
+    fontScale: Float,
     modifier: Modifier,
     onFocus: (String) -> Unit,
 ) {
@@ -180,6 +205,7 @@ private fun CaptionColumn(
                 focused = line.segment.id == focusedId,
                 showTranslation = showTranslation,
                 translationOnly = showTranslation,
+                fontScale = fontScale,
                 onClick = { onFocus(line.segment.id) },
             )
         }
@@ -192,6 +218,7 @@ private fun CaptionCard(
     focused: Boolean,
     showTranslation: Boolean,
     translationOnly: Boolean = false,
+    fontScale: Float = 1f,
     onClick: () -> Unit,
 ) {
     val accent = colorOf(line.speaker?.colorHex ?: "#7C9CFF")
@@ -212,12 +239,13 @@ private fun CaptionCard(
             }
         }
         if (!translationOnly) {
-            Text(line.segment.text)
+            Text(line.segment.text, fontSize = (18 * fontScale).sp)
         }
         if (showTranslation) {
             Text(
                 line.translation?.translatedText ?: "…",
                 color = Color(0xFF9AD0B8),
+                fontSize = (17 * fontScale).sp,
             )
         }
     }

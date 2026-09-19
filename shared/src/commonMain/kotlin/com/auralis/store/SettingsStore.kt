@@ -1,6 +1,7 @@
 package com.auralis.store
 
 import com.auralis.model.GlossaryEntry
+import com.auralis.model.LanguageHint
 import com.auralis.model.PromptTemplate
 import com.auralis.model.TranslationLayout
 import com.auralis.provider.Presets
@@ -29,6 +30,7 @@ data class AppSettings(
     val localLanguage: String = "zh",
     val remoteLanguage: String = "en",
     val diarization: Boolean = true,
+    val language: LanguageHint = LanguageHint.ChineseEnglish,
 )
 
 interface SettingsStore {

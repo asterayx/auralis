@@ -27,6 +27,7 @@ kotlin {
         androidMain.dependencies {
             implementation(project(":shared"))
             implementation(libs.androidx.activity.compose)
+            implementation("androidx.core:core-ktx:1.15.0")
             implementation(libs.androidx.lifecycle.runtime)
             implementation(libs.androidx.lifecycle.viewmodel.compose)
             implementation(platform(libs.androidx.compose.bom))
