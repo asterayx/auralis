@@ -40,9 +40,19 @@ class AppleAuralis internal constructor(
     private val library = LibraryController(app)
     private var live: SessionPipeline? = null
     private var liveWatch: Job? = null
+    private var settingsWatch: Job? = null
 
-    fun watchSettings(onChange: (AppleSettingsSnapshot) -> Unit): Job =
-        scope.launch { app.settings.collect { onChange(it.toSnapshot()) } }
+    fun watchSettings(onChange: (AppleSettingsSnapshot) -> Unit) {
+        settingsWatch?.cancel()
+        settingsWatch = scope.launch { app.settings.collect { onChange(it.toSnapshot()) } }
+    }
+
+    fun close() {
+        settingsWatch?.cancel()
+        settingsWatch = null
+        liveWatch?.cancel()
+        liveWatch = null
+    }
 
     fun load(onDone: (String?) -> Unit) {
         scope.launch {

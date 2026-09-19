@@ -43,7 +43,6 @@ final class AppStore: ObservableObject {
 
     private let host: AppleAuralis
     private let capture = AppleAudioCapture()
-    private var settingsWatch: Kotlinx_coroutines_coreJob?
     private var applyingSettings = false
 
     init() {
@@ -53,9 +52,11 @@ final class AppStore: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         host = AppleAuralis.companion.create(documentsPath: dir.path)
         grokNote = host.grokLanguageNote()
-        keyLinks = rows(host.keyLinks()).map { KeyLinkItem(id: $0.id, url: $0.url) }
+        keyLinks = rows(host.keyLinks(), as: KeyLink.self).map { link in
+            KeyLinkItem(id: link.id, url: link.url)
+        }
         bindAudio()
-        settingsWatch = host.watchSettings { [weak self] settings in
+        host.watchSettings { [weak self] settings in
             Task { @MainActor in self?.apply(settings) }
         }
         host.load { [weak self] error in
@@ -67,7 +68,7 @@ final class AppStore: ObservableObject {
     }
 
     deinit {
-        settingsWatch?.cancel()
+        host.close()
     }
 
     func finishOnboarding(useDemo: Bool) {
@@ -173,13 +174,13 @@ final class AppStore: ObservableObject {
     func refreshLibrary(query: String = "") {
         host.listSessions(query: query) { [weak self] list in
             Task { @MainActor in
-                self?.sessions = rows(list).map { session in
+                self?.sessions = rows(list, as: AppleSessionRow.self).map { session in
                     SessionSummary(
                         id: session.id,
                         title: session.title,
-                        mode: session.translator ? .translator : .scribe,
+                        mode: kbool(session.translator) ? .translator : .scribe,
                         status: session.status,
-                        updated: Date(timeIntervalSince1970: Double(session.updatedAtMs) / 1000)
+                        updated: Date(timeIntervalSince1970: kdouble(session.updatedAtMs) / 1000)
                     )
                 }
             }
@@ -237,11 +238,11 @@ final class AppStore: ObservableObject {
 
     private func bindAudio() {
         capture.onChunk = { [weak self] data, offset in
-            self?.host.audio.pushPcm(data: data as NSData, streamOffsetMs: offset)
+            self?.host.audio.pushPcm(data: data as Data, streamOffsetMs: offset)
         }
         host.audio.onStart = { [weak self] sessionId, keepFile in
             do {
-                try self?.capture.start(sessionId: sessionId, keepFile: keepFile)
+                try self?.capture.start(sessionId: sessionId, keepFile: keepFile.boolValue)
                 return self?.capture.lastFilePath
             } catch {
                 return nil
@@ -268,21 +269,23 @@ final class AppStore: ObservableObject {
     private func apply(_ settings: AppleSettingsSnapshot) {
         applyingSettings = true
         activeProfileId = settings.activeProfileId
-        profiles = rows(settings.profiles).map { Profile(id: $0.id, name: $0.name, detail: $0.detail) }
-        endpoints = rows(settings.endpoints).map {
-            Endpoint(id: $0.id, name: $0.name, baseURL: $0.baseUrl, model: $0.model)
+        profiles = rows(settings.profiles, as: AppleProfileRow.self).map { row in
+            Profile(id: row.id, name: row.name, detail: row.detail)
+        }
+        endpoints = rows(settings.endpoints, as: AppleEndpointRow.self).map { row in
+            Endpoint(id: row.id, name: row.name, baseURL: row.baseUrl, model: row.model)
         }
         languageLabel = settings.languageLabel
         vocabulary = settings.vocabulary
         glossary = settings.glossary
-        bidirectional = settings.bidirectional
-        diarization = settings.diarization
-        keepAudio = settings.keepAudio
-        consentAcknowledged = settings.consent
-        fontScale = settings.fontScale
-        layout = settings.sideBySide ? .sideBySide : .stacked
-        templates = rows(settings.templates).map {
-            PromptTemplate(id: $0.id, name: $0.name, prompt: $0.prompt, isBuiltIn: $0.isBuiltIn)
+        bidirectional = kbool(settings.bidirectional)
+        diarization = kbool(settings.diarization)
+        keepAudio = kbool(settings.keepAudio)
+        consentAcknowledged = kbool(settings.consent)
+        fontScale = kdouble(settings.fontScale)
+        layout = kbool(settings.sideBySide) ? .sideBySide : .stacked
+        templates = rows(settings.templates, as: AppleTemplateRow.self).map { row in
+            PromptTemplate(id: row.id, name: row.name, prompt: row.prompt, isBuiltIn: kbool(row.isBuiltIn))
         }
         defaultTemplateId = settings.defaultTemplateId
         applyingSettings = false
@@ -290,17 +293,19 @@ final class AppStore: ObservableObject {
 
     private func applyLive(mode: SessionMode, snapshot: AppleLiveSnapshot) {
         var translations: [String: String] = [:]
-        let captions: [Caption] = rows(snapshot.captions).map { row in
+        let captions: [Caption] = rows(snapshot.captions, as: AppleCaptionRow.self).map { row in
             if let text = row.translation { translations[row.id] = text }
             return Caption(
                 id: row.id,
                 text: row.text,
                 speaker: row.speaker,
-                isFinal: row.isFinal,
+                isFinal: kbool(row.isFinal),
                 direction: row.direction
             )
         }
-        speakers = rows(snapshot.speakers).map { SpeakerTag(id: $0.id, name: $0.name, color: $0.color) }
+        speakers = rows(snapshot.speakers, as: AppleSpeakerRow.self).map { row in
+            SpeakerTag(id: row.id, name: row.name, color: row.color)
+        }
         focusedCaptionId = snapshot.focusedId ?? focusedCaptionId
         live = .running(
             mode: mode,
@@ -314,29 +319,35 @@ final class AppStore: ObservableObject {
 
     private static func mapDetail(_ detail: AppleSessionDetail) -> SessionDetail {
         var translations: [String: String] = [:]
-        let captions: [Caption] = rows(detail.captions).map { row in
+        let captions: [Caption] = rows(detail.captions, as: AppleCaptionRow.self).map { row in
             if let text = row.translation { translations[row.id] = text }
             return Caption(
                 id: row.id,
                 text: row.text,
                 speaker: row.speaker,
-                isFinal: row.isFinal,
+                isFinal: kbool(row.isFinal),
                 direction: row.direction
             )
         }
         return SessionDetail(
             id: detail.id,
             title: detail.title,
-            mode: detail.translator ? .translator : .scribe,
+            mode: kbool(detail.translator) ? .translator : .scribe,
             status: detail.status,
             captions: captions,
             translations: translations,
-            speakers: rows(detail.speakers).map { SpeakerTag(id: $0.id, name: $0.name, color: $0.color) },
-            usage: detail.hasUsage
-                ? UsageSummary(audioMinutes: detail.audioMinutes, tokens: Int(detail.tokens), estimate: detail.estimate)
+            speakers: rows(detail.speakers, as: AppleSpeakerRow.self).map { row in
+                SpeakerTag(id: row.id, name: row.name, color: row.color)
+            },
+            usage: kbool(detail.hasUsage)
+                ? UsageSummary(
+                    audioMinutes: kdouble(detail.audioMinutes),
+                    tokens: Int(kdouble(detail.tokens)),
+                    estimate: kdouble(detail.estimate)
+                )
                 : nil,
             notes: detail.notes,
-            audioReady: detail.audioReady
+            audioReady: kbool(detail.audioReady)
         )
     }
 
@@ -349,10 +360,33 @@ final class AppStore: ObservableObject {
     }
 }
 
-private func rows<T: AnyObject>(_ value: Any) -> [T] {
+private func rows<T: AnyObject>(_ value: Any, as type: T.Type) -> [T] {
     if let typed = value as? [T] { return typed }
     if let ns = value as? NSArray { return ns.compactMap { $0 as? T } }
+    if let enumerable = value as? NSFastEnumeration {
+        var out: [T] = []
+        let iterator = NSFastEnumerationIterator(enumerable)
+        while let element = iterator.next() {
+            if let typed = element as? T { out.append(typed) }
+        }
+        return out
+    }
     return []
+}
+
+private func kbool(_ value: Any) -> Bool {
+    if let flag = value as? Bool { return flag }
+    if let flag = value as? KotlinBoolean { return flag.boolValue }
+    return false
+}
+
+private func kdouble(_ value: Any) -> Double {
+    if let number = value as? NSNumber { return number.doubleValue }
+    if let number = value as? Double { return number }
+    if let number = value as? KotlinDouble { return number.doubleValue }
+    if let number = value as? KotlinLong { return number.doubleValue }
+    if let number = value as? KotlinInt { return number.doubleValue }
+    return 0
 }
 
 enum SessionMode: String { case scribe = "SCRIBE", translator = "TRANSLATOR" }
