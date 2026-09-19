@@ -365,7 +365,7 @@ private func rows<T: AnyObject>(_ value: Any, as type: T.Type) -> [T] {
     if let ns = value as? NSArray { return ns.compactMap { $0 as? T } }
     if let enumerable = value as? NSFastEnumeration {
         var out: [T] = []
-        let iterator = NSFastEnumerationIterator(enumerable)
+        var iterator = NSFastEnumerationIterator(enumerable)
         while let element = iterator.next() {
             if let typed = element as? T { out.append(typed) }
         }
