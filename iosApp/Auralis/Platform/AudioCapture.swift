@@ -5,6 +5,7 @@ import AVFoundation
 final class AppleAudioCapture: NSObject {
     private let engine = AVAudioEngine()
     private var file: AVAudioFile?
+    private(set) var lastFilePath: String?
     var onChunk: ((Data, Int64) -> Void)?
 
     func start(sessionId: String, keepFile: Bool) throws {
@@ -16,7 +17,10 @@ final class AppleAudioCapture: NSObject {
             ?? input.outputFormat(forBus: 0)
         if keepFile {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(sessionId).caf")
+            lastFilePath = url.path
             file = try AVAudioFile(forWriting: url, settings: format.settings)
+        } else {
+            lastFilePath = nil
         }
         var offset: Int64 = 0
         input.installTap(onBus: 0, bufferSize: 1600, format: format) { [weak self] buffer, _ in

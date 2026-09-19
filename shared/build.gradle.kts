@@ -7,6 +7,17 @@ kotlin {
     jvm()
     jvmToolchain(21)
 
+    listOf(
+        iosArm64(),
+        iosSimulatorArm64(),
+        macosArm64(),
+    ).forEach { target ->
+        target.binaries.framework {
+            baseName = "Shared"
+            isStatic = true
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
@@ -22,6 +33,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.client.mock)
             implementation(kotlin("test"))
+        }
+        appleMain.dependencies {
+            implementation(libs.ktor.client.darwin)
         }
         jvmMain.dependencies {
             implementation(libs.ktor.client.cio)

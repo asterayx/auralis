@@ -20,6 +20,10 @@ struct LibraryView: View {
             }
             .navigationTitle("会话库")
             .searchable(text: $query, prompt: "全文搜索")
+            .onChange(of: query) { _, value in
+                store.refreshLibrary(query: value)
+            }
+            .onAppear { store.refreshLibrary(query: query) }
             .overlay {
                 if store.sessions.isEmpty {
                     Text("还没有会话。到转写页录一段。")
@@ -33,6 +37,7 @@ struct LibraryView: View {
 struct SessionDetailView: View {
     let sessionId: String
     @EnvironmentObject var store: AppStore
+    @State private var detail: SessionDetail?
     @State private var notes = ""
     @State private var focusedId: String?
     @State private var seekLabel: String?
@@ -40,13 +45,9 @@ struct SessionDetailView: View {
     @State private var editDraft = ""
     @State private var export = ""
 
-    private var session: SessionSummary? {
-        store.sessions.first { $0.id == sessionId }
-    }
-
     var body: some View {
         ScrollView {
-            if let session {
+            if let session = detail {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(session.title).font(.title2.bold())
                     Text("\(session.mode.rawValue) · \(session.status)")
@@ -59,7 +60,9 @@ struct SessionDetailView: View {
                     if !session.speakers.isEmpty {
                         Text("说话人").font(.headline)
                         ForEach(session.speakers) { speaker in
-                            SpeakerRenameRow(speaker: speaker)
+                            SpeakerRenameRow(sessionId: sessionId, speaker: speaker) { next in
+                                detail = next
+                            }
                         }
                     }
                     Text("转写 / 译文同步").font(.headline)
@@ -89,7 +92,7 @@ struct SessionDetailView: View {
                             }
                             .onTapGesture {
                                 focusedId = caption.id
-                                seekLabel = "跳转到 00:00:0\(session.captions.firstIndex(where: { $0.id == caption.id }) ?? 0)"
+                                store.seekLabel(sessionId: sessionId, segmentId: caption.id) { seekLabel = $0 }
                             }
                         }
                     }
@@ -98,7 +101,9 @@ struct SessionDetailView: View {
                             .textFieldStyle(.roundedBorder)
                         Button("保存编辑") {
                             if let editingId {
-                                store.editCaption(sessionId: sessionId, captionId: editingId, text: editDraft)
+                                store.editCaption(sessionId: sessionId, captionId: editingId, text: editDraft) {
+                                    detail = $0
+                                }
                             }
                             editingId = nil
                         }
@@ -109,65 +114,43 @@ struct SessionDetailView: View {
                             Text(template.name).tag(template.id)
                         }
                     }
-                    Text(notes.isEmpty ? "点下方按钮用后处理槽位生成纪要。" : notes)
+                    Text(notes.isEmpty ? (session.notes.isEmpty ? "点下方按钮用后处理槽位生成纪要。" : session.notes) : notes)
                     Button("用当前模板生成纪要") {
-                        notes = """
-                        ## Summary
-                        Aligned to pull delivery from 12 Oct to 8 Oct if firmware freezes tonight.
-
-                        ## Action items
-                        - [ ] Firmware owner: freeze tonight
-                        - [ ] Buyer: notify procurement
-                        """
+                        store.generateNotes(sessionId: sessionId, templateId: store.defaultTemplateId) { notes = $0 }
                     }
-                    ShareLink(item: exportMarkdown) {
+                    Button {
+                        store.exportOpen(sessionId: sessionId, markdown: true) { export = $0 }
+                    } label: {
                         Label("导出 Markdown", systemImage: "square.and.arrow.up")
                     }
-                    ShareLink(item: exportTxt) {
+                    Button {
+                        store.exportOpen(sessionId: sessionId, markdown: false) { export = $0 }
+                    } label: {
                         Label("导出 TXT", systemImage: "doc")
                     }
                     if !export.isEmpty {
+                        ShareLink(item: export) {
+                            Label("系统分享", systemImage: "square.and.arrow.up.on.square")
+                        }
                         Text(export).font(.footnote)
                     }
                 }
                 .padding()
+            } else {
+                Text("找不到这场会话。").padding()
             }
         }
         .navigationTitle("会话")
-    }
-
-    private var exportMarkdown: String {
-        guard let session else { return "" }
-        var lines = ["# \(session.title)", ""]
-        if let usage = session.usage {
-            lines.append(String(format: "- Estimated cost: $%.2f (estimate)", usage.estimate))
-            lines.append("")
+        .onAppear {
+            store.loadDetail(sessionId: sessionId) { detail = $0 }
         }
-        for caption in session.captions {
-            let name = session.speakers.first { $0.id == caption.speaker }?.name ?? "S\(caption.speaker)"
-            lines.append("**\(name):** \(caption.text)")
-            if let tr = session.translations[caption.id] {
-                lines.append("- [\(caption.direction)] \(tr)")
-            }
-            lines.append("")
-        }
-        if !notes.isEmpty { lines.append(notes) }
-        return lines.joined(separator: "\n")
-    }
-
-    private var exportTxt: String {
-        guard let session else { return "" }
-        var lines = [session.title, ""]
-        for caption in session.captions {
-            let name = session.speakers.first { $0.id == caption.speaker }?.name ?? "S\(caption.speaker)"
-            lines.append("\(name): \(caption.text)")
-        }
-        return lines.joined(separator: "\n")
     }
 }
 
 private struct SpeakerRenameRow: View {
+    let sessionId: String
     let speaker: SpeakerTag
+    var onRenamed: (SessionDetail?) -> Void
     @EnvironmentObject var store: AppStore
     @State private var draft: String = ""
 
@@ -175,7 +158,9 @@ private struct SpeakerRenameRow: View {
         HStack {
             TextField("显示名", text: $draft)
                 .textFieldStyle(.roundedBorder)
-            Button("重命名") { store.renameSpeaker(id: speaker.id, name: draft) }
+            Button("重命名") {
+                store.renameSpeaker(sessionId: sessionId, id: speaker.id, name: draft, completion: onRenamed)
+            }
         }
         .onAppear { draft = speaker.name }
     }

@@ -23,6 +23,9 @@ struct LiveView: View {
                         Text("上下堆叠").tag(TranslationLayout.stacked)
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: store.layout) { _, value in
+                        store.setLayout(value)
+                    }
                 }
                 ScrollViewReader { proxy in
                     ScrollView {

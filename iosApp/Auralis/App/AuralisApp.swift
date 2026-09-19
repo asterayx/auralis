@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AuralisApp: App {
+struct AuralisScene: App {
     @StateObject private var store = AppStore()
 
     var body: some Scene {

@@ -1,5 +1,8 @@
 package com.auralis.export
 
+import com.auralis.core.formatFixed1
+import com.auralis.core.pad2
+import com.auralis.core.pad3
 import com.auralis.model.SessionBundle
 import com.auralis.model.TranscriptSegment
 
@@ -20,7 +23,7 @@ object TranscriptExporter {
         appendLine("- Mode: ${bundle.session.mode}")
         appendLine("- Created: ${bundle.session.createdAtMs}")
         bundle.usage?.let {
-            appendLine("- Audio: ${"%.1f".format(it.audioMs / 1000.0 / 60.0)} min")
+            appendLine("- Audio: ${formatFixed1(it.audioMs / 1000.0 / 60.0)} min")
             it.estimatedUsd?.let { usd -> appendLine("- Estimated cost: $$usd (estimate)") }
         }
         appendLine()
@@ -84,7 +87,7 @@ object TranscriptExporter {
         val seconds = (clamped % 60_000) / 1000
         val millis = clamped % 1000
         val sep = if (vtt) '.' else ','
-        return "%02d:%02d:%02d%c%03d".format(hours, minutes, seconds, sep, millis)
+        return "${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}$sep${pad3(millis)}"
     }
 }
 

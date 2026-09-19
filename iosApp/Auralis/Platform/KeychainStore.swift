@@ -1,12 +1,14 @@
 import Foundation
 import Security
 
+/// Raw Keychain helpers. The live path is KMP `AuralisApp.saveKey` →
+/// `KeychainSecureStore` (same alias scheme: `auralis.provider.<endpointId>`).
 enum KeychainStore {
     static func put(_ alias: String, value: String) {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: "auralis.provider.\(alias)",
+            kSecAttrAccount as String: alias,
             kSecAttrService as String: "com.auralis.app",
         ]
         SecItemDelete(query as CFDictionary)
@@ -19,7 +21,7 @@ enum KeychainStore {
     static func get(_ alias: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: "auralis.provider.\(alias)",
+            kSecAttrAccount as String: alias,
             kSecAttrService as String: "com.auralis.app",
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -33,7 +35,7 @@ enum KeychainStore {
     static func delete(_ alias: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: "auralis.provider.\(alias)",
+            kSecAttrAccount as String: alias,
             kSecAttrService as String: "com.auralis.app",
         ]
         SecItemDelete(query as CFDictionary)
