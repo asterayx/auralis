@@ -222,11 +222,9 @@ struct SettingsView: View {
     }
 
     private var probeColor: Color {
-        switch store.keyProbeOk {
-        case true: return .green
-        case false: return .red
-        case nil: return .secondary
-        }
+        if store.keyProbeOk == true { return .green }
+        if store.keyProbeOk == false { return .red }
+        return .secondary
     }
 
     private func applyEndpoint(_ id: String) {

@@ -30,6 +30,9 @@ if [[ ! -f "$EXPORT_PLIST" ]]; then
 fi
 
 command -v xcodegen >/dev/null || brew install xcodegen
+if [ -z "${JAVA_HOME:-}" ] && /usr/libexec/java_home >/dev/null 2>&1; then
+  export JAVA_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || /usr/libexec/java_home)"
+fi
 mkdir -p "$DIST"
 cd "$IOS"
 xcodegen generate
