@@ -28,6 +28,7 @@ import com.auralis.provider.ConnectivityTester
 import com.auralis.provider.InMemorySecureStore
 import com.auralis.provider.Presets
 import com.auralis.provider.ProviderFactory
+import com.auralis.provider.ProviderKind
 import com.auralis.provider.ResolvedEndpoint
 import com.auralis.provider.SecureStore
 import com.auralis.provider.secretAlias
@@ -77,9 +78,55 @@ class AuralisApp(
     }
 
     suspend fun saveKey(endpointId: String, key: String): ConnectivityResult {
-        secrets.put(secretAlias(endpointId), key)
+        val trimmed = key.trim()
+        val stored = secrets.get(secretAlias(endpointId)).orEmpty()
+        if (trimmed.isNotBlank()) {
+            secrets.put(secretAlias(endpointId), trimmed)
+        }
         val endpoint = _settings.value.endpoints.first { it.id == endpointId }
-        return tester.test(ResolvedEndpoint(endpoint, key))
+        val toUse = trimmed.ifBlank { stored }
+        return tester.test(ResolvedEndpoint(endpoint, toUse))
+    }
+
+    suspend fun hasKey(endpointId: String): Boolean {
+        val endpoint = _settings.value.endpoints.firstOrNull { it.id == endpointId } ?: return false
+        if (endpoint.kind == ProviderKind.DEMO) return true
+        return !secrets.get(secretAlias(endpointId)).isNullOrBlank()
+    }
+
+    suspend fun configuredEndpointIds(): Set<String> =
+        _settings.value.endpoints.mapNotNull { endpoint ->
+            if (hasKey(endpoint.id)) endpoint.id else null
+        }.toSet()
+
+    suspend fun probeModels(endpointId: String, keyDraft: String = ""): ConnectivityResult {
+        val endpoint = _settings.value.endpoints.firstOrNull { it.id == endpointId }
+            ?: return ConnectivityResult(false, "Unknown endpoint.")
+        val key = keyDraft.trim().ifBlank { secrets.get(secretAlias(endpointId)).orEmpty() }
+        val result = tester.test(ResolvedEndpoint(endpoint, key))
+        val models = (result.models + listOfNotNull(endpoint.model.takeIf { it.isNotBlank() }))
+            .distinct()
+        return result.copy(models = models)
+    }
+
+    suspend fun setProfileSlots(
+        profileId: String,
+        sttId: String,
+        translationId: String,
+        postProcessId: String,
+    ) {
+        persist { settings ->
+            settings.copy(
+                profiles = settings.profiles.map { profile ->
+                    if (profile.id != profileId) profile
+                    else profile.copy(
+                        sttId = sttId,
+                        translationId = translationId,
+                        postProcessId = postProcessId,
+                    )
+                },
+            )
+        }
     }
 
     suspend fun updateEndpoint(

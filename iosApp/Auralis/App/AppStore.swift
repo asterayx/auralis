@@ -22,6 +22,9 @@ final class AppStore: ObservableObject {
     @Published var profiles: [Profile] = []
     @Published var activeProfileId: String = "profile-demo"
     @Published var lastStatus: String?
+    @Published var keyProbeStatus: String?
+    @Published var keyProbeOk: Bool?
+    @Published var modelCandidates: [String] = []
     @Published var fontScale: Double = 1.0
     @Published var consentAcknowledged: Bool = true
     @Published var bidirectional: Bool = true
@@ -44,6 +47,7 @@ final class AppStore: ObservableObject {
     private let host: AppleAuralis
     private let capture = AppleAudioCapture()
     private var applyingSettings = false
+    private var probeTask: Task<Void, Never>?
 
     init() {
         onboarded = UserDefaults.standard.bool(forKey: "auralis.onboarded")
@@ -100,6 +104,39 @@ final class AppStore: ObservableObject {
         host.setActiveProfile(id: id) { _ in }
     }
 
+    func setProfileSlots(sttId: String, translationId: String, postProcessId: String) {
+        guard !applyingSettings else { return }
+        host.setProfileSlots(
+            profileId: activeProfileId,
+            sttId: sttId,
+            translationId: translationId,
+            postProcessId: postProcessId
+        ) { _ in }
+    }
+
+    func scheduleModelProbe(endpointId: String, key: String) {
+        probeTask?.cancel()
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configured = endpoints.first(where: { $0.id == endpointId })?.configured == true
+        guard trimmed.count >= 8 || (trimmed.isEmpty && configured) else { return }
+        probeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            probeModels(endpointId: endpointId, key: trimmed)
+        }
+    }
+
+    func probeModels(endpointId: String, key: String) {
+        keyProbeStatus = "正在拉取模型列表…"
+        keyProbeOk = nil
+        host.probeModels(endpointId: endpointId, key: key) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.applyProbe(result, prefix: nil)
+            }
+        }
+    }
+
     func setLanguage(_ label: String) {
         guard !applyingSettings else { return }
         host.setLanguage(label: label) { _ in }
@@ -143,17 +180,42 @@ final class AppStore: ObservableObject {
         host.setRecordingConsent(value: value) { _ in }
     }
 
-    func saveKey(endpointId: String, key: String) {
-        host.updateEndpoint(endpointId: endpointId, baseUrl: baseURL, model: modelName) { [weak self] _ in
+    func saveKey(endpointId: String, key: String, onDone: @escaping (Bool) -> Void) {
+        keyProbeStatus = "正在保存并测试连通性…"
+        keyProbeOk = nil
+        host.updateEndpoint(endpointId: endpointId, baseUrl: baseURL, model: modelName) { [weak self] error in
             guard let self else { return }
-            if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Task { @MainActor in self.lastStatus = "已更新 Base URL / 模型。" }
+            if let error {
+                Task { @MainActor in
+                    self.keyProbeOk = false
+                    self.keyProbeStatus = "保存失败 · \(error)"
+                    onDone(false)
+                }
                 return
             }
-            self.host.saveKey(endpointId: endpointId, key: key) { _, message in
-                Task { @MainActor in self.lastStatus = message }
+            self.host.saveKey(endpointId: endpointId, key: key) { result in
+                Task { @MainActor in
+                    let ok = self.applyProbe(result, prefix: kbool(result.ok) ? "保存成功" : "保存失败")
+                    onDone(ok)
+                }
             }
         }
+    }
+
+    @discardableResult
+    private func applyProbe(_ result: AppleProbeResult, prefix: String?) -> Bool {
+        let ok = kbool(result.ok)
+        keyProbeOk = ok
+        let message = result.message
+        keyProbeStatus = prefix.map { "\($0) · \(message)" } ?? message
+        let models = stringList(result.models)
+        if !models.isEmpty {
+            modelCandidates = models
+            if modelName.isEmpty {
+                modelName = models[0]
+            }
+        }
+        return ok
     }
 
     func addTemplate(name: String, prompt: String) {
@@ -270,10 +332,25 @@ final class AppStore: ObservableObject {
         applyingSettings = true
         activeProfileId = settings.activeProfileId
         profiles = rows(settings.profiles, as: AppleProfileRow.self).map { row in
-            Profile(id: row.id, name: row.name, detail: row.detail)
+            Profile(
+                id: row.id,
+                name: row.name,
+                detail: row.detail,
+                sttId: row.sttId,
+                translationId: row.translationId,
+                postProcessId: row.postProcessId
+            )
         }
         endpoints = rows(settings.endpoints, as: AppleEndpointRow.self).map { row in
-            Endpoint(id: row.id, name: row.name, baseURL: row.baseUrl, model: row.model)
+            Endpoint(
+                id: row.id,
+                name: row.name,
+                baseURL: row.baseUrl,
+                model: row.model,
+                slot: row.slot,
+                configured: kbool(row.configured),
+                isDemo: kbool(row.isDemo)
+            )
         }
         languageLabel = settings.languageLabel
         vocabulary = settings.vocabulary
@@ -357,6 +434,34 @@ final class AppStore: ObservableObject {
         #else
         await AVAudioApplication.requestRecordPermission()
         #endif
+    }
+}
+
+private func stringList(_ value: Any?) -> [String] {
+    guard let value else { return [] }
+    if let typed = value as? [String] { return typed }
+    if let ns = value as? NSArray {
+        return ns.compactMap { item in
+            if let text = item as? String { return text }
+            return String(describing: item).nilIfKotlinNull
+        }
+    }
+    if let enumerable = value as? NSFastEnumeration {
+        var out: [String] = []
+        var iterator = NSFastEnumerationIterator(enumerable)
+        while let element = iterator.next() {
+            if let text = element as? String {
+                out.append(text)
+            }
+        }
+        return out
+    }
+    return []
+}
+
+private extension String {
+    var nilIfKotlinNull: String? {
+        self == "null" ? nil : self
     }
 }
 
@@ -448,6 +553,9 @@ struct Profile: Identifiable {
     let id: String
     let name: String
     let detail: String
+    let sttId: String
+    let translationId: String
+    let postProcessId: String
 }
 
 struct Endpoint: Identifiable {
@@ -455,6 +563,9 @@ struct Endpoint: Identifiable {
     let name: String
     let baseURL: String
     let model: String
+    let slot: String
+    let configured: Bool
+    let isDemo: Bool
 }
 
 struct KeyLinkItem: Identifiable {

@@ -50,3 +50,15 @@ data class ResolvedEndpoint(
     val endpoint: ProviderEndpoint,
     val apiKey: String,
 )
+
+fun ProviderEndpoint.fitsStt(): Boolean = when (kind) {
+    ProviderKind.OPENAI_COMPAT_LLM -> false
+    ProviderKind.DEMO -> id.startsWith("stt-")
+    else -> true
+}
+
+fun ProviderEndpoint.fitsLlm(): Boolean = when (kind) {
+    ProviderKind.OPENAI_COMPAT_LLM -> true
+    ProviderKind.DEMO -> id.startsWith("llm-")
+    else -> false
+}

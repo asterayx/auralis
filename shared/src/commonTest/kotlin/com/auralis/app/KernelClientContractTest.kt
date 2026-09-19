@@ -33,4 +33,52 @@ class KernelClientContractTest {
         assertTrue(!result.ok)
         assertTrue(result.message.contains("empty", ignoreCase = true))
     }
+
+    @Test
+    fun blankSaveRetestsStoredKeyWithoutOverwriting() = runBlocking {
+        val secrets = InMemorySecureStore()
+        secrets.put(secretAlias(Presets.demoStt.id), "stored-key")
+        val app = AuralisApp(secrets = secrets)
+        app.load()
+        val result = app.saveKey(Presets.demoStt.id, "  ")
+        assertTrue(result.ok)
+        assertEquals("stored-key", secrets.get(secretAlias(Presets.demoStt.id)))
+        assertTrue(result.models.contains("demo"))
+    }
+
+    @Test
+    fun setProfileSlotsUpdatesCombination() = runBlocking {
+        val app = AuralisApp()
+        app.load()
+        app.setProfileSlots(
+            Presets.qualityMeeting.id,
+            Presets.grokStt.id,
+            Presets.deepseekLlm.id,
+            Presets.openaiLlm.id,
+        )
+        val profile = app.settings.value.profiles.first { it.id == Presets.qualityMeeting.id }
+        assertEquals(Presets.grokStt.id, profile.sttId)
+        assertEquals(Presets.deepseekLlm.id, profile.translationId)
+        assertEquals(Presets.openaiLlm.id, profile.postProcessId)
+    }
+
+    @Test
+    fun probeModelsDemoReturnsCandidate() = runBlocking {
+        val app = AuralisApp()
+        app.load()
+        val result = app.probeModels(Presets.demoStt.id, "")
+        assertTrue(result.ok)
+        assertTrue(result.models.contains("demo"))
+    }
+
+    @Test
+    fun hasKeyIsFalseUntilSecretExists() = runBlocking {
+        val secrets = InMemorySecureStore()
+        val app = AuralisApp(secrets = secrets)
+        app.load()
+        assertTrue(!app.hasKey(Presets.soniox.id))
+        assertTrue(app.hasKey(Presets.demoStt.id))
+        secrets.put(secretAlias(Presets.soniox.id), "sk-test")
+        assertTrue(app.hasKey(Presets.soniox.id))
+    }
 }

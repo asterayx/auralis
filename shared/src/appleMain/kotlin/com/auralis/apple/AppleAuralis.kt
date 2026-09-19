@@ -18,6 +18,8 @@ import com.auralis.pipeline.SessionPipeline
 import com.auralis.provider.KeychainSecureStore
 import com.auralis.provider.Presets
 import com.auralis.provider.ProviderKind
+import com.auralis.provider.fitsLlm
+import com.auralis.provider.fitsStt
 import com.auralis.store.AppSettings
 import com.auralis.store.FileTextStore
 import com.auralis.store.JsonSessionRepository
@@ -42,14 +44,25 @@ class AppleAuralis internal constructor(
     private var liveWatch: Job? = null
     private var settingsWatch: Job? = null
 
+    private var settingsListener: ((AppleSettingsSnapshot) -> Unit)? = null
+
     fun watchSettings(onChange: (AppleSettingsSnapshot) -> Unit) {
+        settingsListener = onChange
         settingsWatch?.cancel()
-        settingsWatch = scope.launch { app.settings.collect { onChange(it.toSnapshot()) } }
+        settingsWatch = scope.launch {
+            app.settings.collect { emitSettings() }
+        }
+    }
+
+    private suspend fun emitSettings() {
+        val listener = settingsListener ?: return
+        listener(app.settings.value.toSnapshot(app.configuredEndpointIds()))
     }
 
     fun close() {
         settingsWatch?.cancel()
         settingsWatch = null
+        settingsListener = null
         liveWatch?.cancel()
         liveWatch = null
     }
@@ -98,16 +111,35 @@ class AppleAuralis internal constructor(
         }
     }
 
-    fun saveKey(endpointId: String, key: String, onDone: (Boolean, String) -> Unit) {
+    fun saveKey(endpointId: String, key: String, onDone: (AppleProbeResult) -> Unit) {
         scope.launch {
             val result = app.saveKey(endpointId, key)
-            onDone(result.ok, result.message)
+            emitSettings()
+            onDone(result.toProbe())
+        }
+    }
+
+    fun probeModels(endpointId: String, key: String, onDone: (AppleProbeResult) -> Unit) {
+        scope.launch {
+            onDone(app.probeModels(endpointId, key).toProbe())
         }
     }
 
     fun updateEndpoint(endpointId: String, baseUrl: String, model: String, onDone: (String?) -> Unit) {
         scope.launch {
             runCatching { app.updateEndpoint(endpointId, baseUrl = baseUrl, model = model) }.report(onDone)
+        }
+    }
+
+    fun setProfileSlots(
+        profileId: String,
+        sttId: String,
+        translationId: String,
+        postProcessId: String,
+        onDone: (String?) -> Unit,
+    ) {
+        scope.launch {
+            runCatching { app.setProfileSlots(profileId, sttId, translationId, postProcessId) }.report(onDone)
         }
     }
 
@@ -276,10 +308,19 @@ data class KeyLink(
     val url: String,
 )
 
+data class AppleProbeResult(
+    val ok: Boolean,
+    val message: String,
+    val models: List<String>,
+)
+
 data class AppleProfileRow(
     val id: String,
     val name: String,
     val detail: String,
+    val sttId: String,
+    val translationId: String,
+    val postProcessId: String,
 )
 
 data class AppleEndpointRow(
@@ -287,6 +328,9 @@ data class AppleEndpointRow(
     val name: String,
     val baseUrl: String,
     val model: String,
+    val slot: String,
+    val configured: Boolean,
+    val isDemo: Boolean,
 )
 
 data class AppleTemplateRow(
@@ -365,13 +409,31 @@ private fun <T> Result<T>.report(onDone: (String?) -> Unit) {
     fold(onSuccess = { onDone(null) }, onFailure = { onDone(it.message ?: it.toString()) })
 }
 
-private fun AppSettings.toSnapshot(): AppleSettingsSnapshot {
+private fun com.auralis.provider.ConnectivityResult.toProbe(): AppleProbeResult =
+    AppleProbeResult(ok, message, models)
+
+private fun AppSettings.toSnapshot(configured: Set<String>): AppleSettingsSnapshot {
     val defaultId = templates.firstOrNull { it.isDefault }?.id ?: templates.firstOrNull()?.id.orEmpty()
     return AppleSettingsSnapshot(
         activeProfileId = activeProfileId,
-        profiles = profiles.map { AppleProfileRow(it.id, it.name, it.description) },
-        endpoints = endpoints.filter { it.kind != ProviderKind.DEMO }.map {
-            AppleEndpointRow(it.id, it.displayName, it.baseUrl, it.model)
+        profiles = profiles.map {
+            AppleProfileRow(it.id, it.name, it.description, it.sttId, it.translationId, it.postProcessId)
+        },
+        endpoints = endpoints.map {
+            val slot = when {
+                it.fitsStt() -> "stt"
+                it.fitsLlm() -> "llm"
+                else -> "other"
+            }
+            AppleEndpointRow(
+                id = it.id,
+                name = it.displayName,
+                baseUrl = it.baseUrl,
+                model = it.model,
+                slot = slot,
+                configured = it.kind == ProviderKind.DEMO || it.id in configured,
+                isDemo = it.kind == ProviderKind.DEMO,
+            )
         },
         languageLabel = language.label,
         vocabulary = vocabulary.joinToString(", "),
