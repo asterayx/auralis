@@ -351,7 +351,7 @@ data class AppleSessionDetail(
     val audioReady: Boolean,
 )
 
-private fun Result<Unit>.report(onDone: (String?) -> Unit) {
+private fun <T> Result<T>.report(onDone: (String?) -> Unit) {
     fold(onSuccess = { onDone(null) }, onFailure = { onDone(it.message ?: it.toString()) })
 }
 

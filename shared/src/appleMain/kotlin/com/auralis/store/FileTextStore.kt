@@ -1,5 +1,6 @@
 package com.auralis.store
 
+import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
@@ -9,6 +10,7 @@ import platform.Foundation.writeToFile
 /**
  * Documents-directory JSON store for Apple. Same contract as the JVM [FileTextStore].
  */
+@OptIn(ExperimentalForeignApi::class)
 class FileTextStore(rootPath: String) : TextStore {
     private val root = rootPath.trimEnd('/')
     private val fm = NSFileManager.defaultManager

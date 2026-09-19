@@ -90,7 +90,7 @@ private fun NSData.utf8String(): String {
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private inline fun withCfDictionary(query: Map<Any?, Any?>, block: (CFDictionaryRef?) -> Int32): Int32 {
+private inline fun <T> withCfDictionary(query: Map<Any?, Any?>, block: (CFDictionaryRef?) -> T): T {
     val retained = CFBridgingRetain(query)
     return try {
         block(retained as CFDictionaryRef?)
