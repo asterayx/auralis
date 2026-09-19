@@ -1,0 +1,15 @@
+.gradle/
+build/
+**/build/
+.idea/
+.kotlin/
+*.iml
+local.properties
+.DS_Store
+captures/
+*.apk
+xcuserdata/
+DerivedData/
+*.xcuserstate
+.cursor/
+agent-tools/

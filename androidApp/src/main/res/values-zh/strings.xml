@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Auralis 聆语</string>
+    <string name="privacy_notice">音频和文本只会发送到你配置的模型厂商。Auralis 没有自有服务器，也没有账号体系。</string>
+</resources>

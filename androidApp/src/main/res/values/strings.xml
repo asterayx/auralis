@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Auralis</string>
+    <string name="privacy_notice">Your audio and text are sent only to the providers you configured. Auralis has no backend and does not keep an account.</string>
+</resources>

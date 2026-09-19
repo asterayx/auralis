@@ -1,0 +1,23 @@
+name: Auralis
+options:
+  bundleIdPrefix: com.auralis
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+settings:
+  base:
+    PRODUCT_NAME: Auralis
+    SWIFT_VERSION: 5.9
+    GENERATE_INFOPLIST_FILE: NO
+    INFOPLIST_FILE: Auralis/Resources/Info.plist
+targets:
+  Auralis:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Auralis
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.app
+        CODE_SIGN_ENTITLEMENTS: Auralis/Resources/Auralis.entitlements
+        INFOPLIST_FILE: Auralis/Resources/Info.plist
