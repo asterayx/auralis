@@ -145,13 +145,20 @@ class DemoLlmAdapter(
 
     override suspend fun complete(request: ChatRequest): ChatChunk {
         val last = request.messages.lastOrNull()?.content.orEmpty()
+        val system = request.messages.firstOrNull { it.role == "system" }?.content.orEmpty()
         val utterance = last.substringAfter("Utterance:", "").trim()
         val text = when {
+            system.contains("Title this meeting") || last.contains("Title this meeting") ->
+                when {
+                    last.contains("供应商") -> "供应商对齐会"
+                    last.contains("firmware", ignoreCase = true) -> "Firmware review"
+                    else -> last.lineSequence().firstOrNull { it.isNotBlank() }?.take(24) ?: "Untitled session"
+                }
             last.contains("Translate the LAST utterance") && utterance.isNotBlank() ->
                 DEMO_TRANSLATIONS[utterance] ?: "[en] $utterance"
-            last.contains("Action items", ignoreCase = true) || last.contains("行动项") ->
+            system.contains("Extract action items") ->
                 "- [ ] Firmware owner: freeze firmware tonight\n- [ ] Procurement: update the delivery date to 8 Oct"
-            last.contains("polish", ignoreCase = true) || last.contains("润色") ->
+            system.contains("Clean the transcript") ->
                 last.substringAfter("transcript", last).trim()
             else ->
                 """

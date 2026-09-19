@@ -27,6 +27,14 @@ final class AppStore: ObservableObject {
     @Published var layout: TranslationLayout = .sideBySide
     @Published var focusedCaptionId: String?
     @Published var speakers: [SpeakerTag] = []
+    @Published var languageLabel: String = "中+英"
+    @Published var vocabulary: String = ""
+    @Published var glossary: String = ""
+    @Published var keepAudio: Bool = true
+    @Published var baseURL: String = ""
+    @Published var modelName: String = ""
+    @Published var templates: [PromptTemplate] = PromptTemplate.defaults
+    @Published var defaultTemplateId: String = "tpl-meeting-notes"
 
     init() {
         onboarded = UserDefaults.standard.bool(forKey: "auralis.onboarded")
@@ -58,7 +66,8 @@ final class AppStore: ObservableObject {
                     updated: Date(),
                     captions: captions,
                     translations: translations,
-                    speakers: speakers
+                    speakers: speakers,
+                    usage: UsageSummary(audioMinutes: 0.1, tokens: 80, estimate: 0.0)
                 ),
                 at: 0
             )
@@ -73,6 +82,15 @@ final class AppStore: ObservableObject {
         return sessions.filter {
             $0.title.lowercased().contains(q) ||
             $0.captions.contains { $0.text.lowercased().contains(q) }
+        }
+    }
+
+    func editCaption(sessionId: String, captionId: String, text: String) {
+        sessions = sessions.map { session in
+            guard session.id == sessionId else { return session }
+            var next = session
+            next.captions = next.captions.map { $0.id == captionId ? Caption(id: $0.id, text: text, speaker: $0.speaker, isFinal: $0.isFinal, direction: $0.direction) : $0 }
+            return next
         }
     }
 
@@ -148,6 +166,7 @@ struct SessionSummary: Identifiable {
     var captions: [Caption] = []
     var translations: [String: String] = [:]
     var speakers: [SpeakerTag] = SpeakerTag.defaults
+    var usage: UsageSummary? = UsageSummary(audioMinutes: 6.2, tokens: 640, estimate: 0.08)
 
     static let demoLibrary = [
         SessionSummary(
@@ -165,7 +184,33 @@ struct SessionSummary: Identifiable {
                 "c2": "如果今晚冻结固件，可以提前两天。",
             ]
         ),
-        SessionSummary(id: "d2", title: "Firmware review", mode: .scribe, status: "READY", updated: Date().addingTimeInterval(-3600)),
+        SessionSummary(
+            id: "d2",
+            title: "Firmware review",
+            mode: .scribe,
+            status: "READY",
+            updated: Date().addingTimeInterval(-3600),
+            usage: UsageSummary(audioMinutes: 42, tokens: 1200, estimate: 0.12)
+        ),
+    ]
+}
+
+struct UsageSummary {
+    var audioMinutes: Double
+    var tokens: Int
+    var estimate: Double
+}
+
+struct PromptTemplate: Identifiable {
+    let id: String
+    var name: String
+    var prompt: String
+    var isBuiltIn: Bool
+
+    static let defaults = [
+        PromptTemplate(id: "tpl-meeting-notes", name: "Meeting notes", prompt: "Summary / key points / actions / open questions", isBuiltIn: true),
+        PromptTemplate(id: "tpl-actions", name: "Action items", prompt: "Extract action items", isBuiltIn: true),
+        PromptTemplate(id: "tpl-polish", name: "Polish transcript", prompt: "Fix punctuation", isBuiltIn: true),
     ]
 }
 

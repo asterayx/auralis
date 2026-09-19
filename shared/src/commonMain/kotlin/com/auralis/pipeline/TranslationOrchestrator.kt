@@ -25,6 +25,10 @@ class TranslationOrchestrator(
 ) {
     private val done = LinkedHashMap<String, TranslatedSegment>()
     private val mutex = Mutex()
+    var inputTokens: Int = 0
+        private set
+    var outputTokens: Int = 0
+        private set
 
     fun snapshot(): List<TranslatedSegment> = done.values.toList()
 
@@ -72,6 +76,8 @@ class TranslationOrchestrator(
         } catch (e: ProviderError) {
             throw e
         }
+        inputTokens += result.inputTokens
+        outputTokens += result.outputTokens
         val translated = TranslatedSegment(
             segmentId = segment.id,
             sourceText = segment.text,

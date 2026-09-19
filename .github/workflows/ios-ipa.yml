@@ -35,12 +35,19 @@ jobs:
         with:
           xcode-version: "16.4"
 
-      - name: Require Apple signing secrets
+      - name: Decide signing
+        id: signing
         run: |
-          if [ -z "${DEVELOPMENT_TEAM}" ]; then
+          if [ -n "${DEVELOPMENT_TEAM}" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+            echo "Apple signing secrets are present."
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Missing GitHub secret DEVELOPMENT_TEAM (Apple Team ID)."
             echo "Also set BUILD_CERTIFICATE_BASE64, P12_PASSWORD, BUILD_PROVISION_PROFILE_BASE64."
             exit 1
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "No Apple signing secrets on this push; compiling unsigned instead of failing."
           fi
           if [ "${{ github.event.inputs.upload_testflight }}" = "true" ] || [ "$IOS_EXPORT_METHOD" = "app-store" ]; then
             if [ -z "${APP_STORE_CONNECT_KEY_ID}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID}" ] || [ -z "${APP_STORE_CONNECT_API_KEY_P8}" ]; then
@@ -52,6 +59,7 @@ jobs:
           fi
 
       - name: Import certificate and profile
+        if: steps.signing.outputs.has_secrets == 'true'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -75,17 +83,23 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Compile unsigned
+        if: steps.signing.outputs.has_secrets != 'true'
+        run: bash iosApp/ci/compile-unsigned.sh
+
       - name: Archive and export IPA
+        if: steps.signing.outputs.has_secrets == 'true'
         run: bash iosApp/ci/build-ipa.sh
 
       - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.has_secrets == 'true'
         with:
           name: Auralis-ipa
           path: dist/ios/*.ipa
           if-no-files-found: error
 
       - name: Upload to TestFlight
-        if: ${{ github.event.inputs.upload_testflight == 'true' }}
+        if: ${{ github.event.inputs.upload_testflight == 'true' && steps.signing.outputs.has_secrets == 'true' }}
         run: |
           brew install fastlane
           bash iosApp/ci/upload-testflight.sh

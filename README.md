@@ -29,9 +29,11 @@
 | STT-1/2/3/4 | 临时词/定稿、语种、热词、时间戳 | `Segmenter` + 各 STT 适配器 |
 | TR-1/2/3 | 并排译文、按定稿句翻译、上下文+术语表 | `TranslationOrchestrator` |
 | PP-1/2 | 会后纪要模板 + 自定义模板 | `PostProcessor` + `BuiltInTemplates` |
-| LIB-1/2/3 | 会话库、可编辑覆盖层、MD/TXT 导出 | `SessionRepository` + `TranscriptExporter` |
-| KEY-1/2/3/4 | Keychain/Keystore、连通性测试、配置档、引导 | `SecureStore` + `Presets` + 引导页 |
-| COST-1 | 会话用量记录与估算 | `CostEstimator` |
+| LIB-1/2/3 | 会话库、LLM 自动标题、可编辑覆盖层、MD/TXT 导出与分享 | `JsonSessionRepository` + `SessionTitle` + `TranscriptExporter` |
+| KEY-1/2/3/4 | Keychain/Keystore、Base URL/模型、连通性测试、配置档、引导 | `SecureStore` + `Presets` + 引导页 |
+| COST-1 | 会话用量记录与估算，会话详情可见 | `CostEstimator` |
+| STT-2/3 · TR-3 | 语种选择、热词、术语表设置页 | `AppSettings` |
+| REC-3 | 可选保留本地音频；Android 边录边写 PCM | `AudioCapture` + 设置开关 |
 | UI-M2 | 说话人分轨、中英双向翻译、原文/译文同步 | `SpeakerRoster` + `TranslationOrchestrator` + Live / Library UI |
 | 适配器 | Soniox · Grok STT · OpenAI 兼容非流式 · ElevenLabs · OpenAI 兼容流式 · OpenAI 兼容 LLM | `provider/` |
 
@@ -67,7 +69,7 @@
 
 | 方式 | 编译机 | 入口 |
 | --- | --- | --- |
-| GitHub Actions | `macos-15` + Xcode 16 | `.github/workflows/ios-ipa.yml`（手动 Run workflow） |
+| GitHub Actions | `macos-15` + Xcode 16 | `.github/workflows/ios-ipa.yml`（push 无签名密钥时只做 unsigned compile；手动 Run workflow 才打签名 IPA） |
 | Codemagic | 云端 Mac mini | `codemagic.yaml` |
 | 自己的 Mac | 本机 Xcode | `bash iosApp/ci/build-ipa.sh` |
 

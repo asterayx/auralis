@@ -160,6 +160,8 @@ class SessionPipeline(
                 audioMs = s.audioMs,
                 sttProviderId = if (usingFallback) fallbackStt?.id else stt.id,
                 sttModel = null,
+                translationInputTokens = translator?.inputTokens ?: 0,
+                translationOutputTokens = translator?.outputTokens ?: 0,
             ),
         )
     }
