@@ -36,15 +36,13 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         SWIFT_EMIT_LOC_STRINGS: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     preBuildScripts:
       - name: Build Shared KMP
+        shell: /bin/bash
         basedOnDependencyAnalysis: false
-        outputFiles:
-          - $(SRCROOT)/Frameworks/Shared.framework
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)/Shared.framework
         script: |
-          set -euo pipefail
-          bash "$SRCROOT/ci/build-shared-framework.sh"
+          /bin/bash "$SRCROOT/ci/build-shared-framework.sh"
     scheme:
       gatherCoverageData: false
       testTargets: []
@@ -59,14 +57,12 @@ targets:
         INFOPLIST_FILE: Auralis/Resources/Info-macOS.plist
         CODE_SIGN_ENTITLEMENTS: Auralis/Resources/Auralis.entitlements
         CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     preBuildScripts:
       - name: Build Shared KMP
+        shell: /bin/bash
         basedOnDependencyAnalysis: false
-        outputFiles:
-          - $(SRCROOT)/Frameworks/Shared.framework
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)/Shared.framework
         script: |
-          set -euo pipefail
-          bash "$SRCROOT/ci/build-shared-framework.sh"
+          /bin/bash "$SRCROOT/ci/build-shared-framework.sh"
     scheme:
       gatherCoverageData: false
