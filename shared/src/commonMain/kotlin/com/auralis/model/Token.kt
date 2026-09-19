@@ -43,4 +43,5 @@ data class EditOverlay(
 data class Speaker(
     val id: String,
     val displayName: String,
+    val colorHex: String = "#7C9CFF",
 )

@@ -71,6 +71,18 @@ fun SettingsScreen(app: AuralisApp, modifier: Modifier = Modifier) {
             }
         }) { Text("保存并测试连通性") }
         status?.let { Text(it) }
+        Text("翻译与说话人", style = MaterialTheme.typography.titleMedium)
+        FilterChip(
+            selected = settings.bidirectional,
+            onClick = { scope.launch { app.persist { it.copy(bidirectional = !it.bidirectional) } } },
+            label = { Text(if (settings.bidirectional) "双向翻译开" else "双向翻译关") },
+        )
+        FilterChip(
+            selected = settings.diarization,
+            onClick = { scope.launch { app.persist { it.copy(diarization = !it.diarization) } } },
+            label = { Text(if (settings.diarization) "说话人分轨开" else "说话人分轨关") },
+        )
+        Text("本侧 ${settings.localLanguage} ↔ 对侧 ${settings.remoteLanguage}。中英会议默认互译。")
         Text("隐私", style = MaterialTheme.typography.titleMedium)
         Text("你的数据会发送给你所选的 Provider。默认关闭崩溃上报。")
         Text("后台录音：请把 Auralis 加入厂商省电白名单，避免被杀进程。")

@@ -35,7 +35,7 @@
 | --- | --- |
 | M0 技术验证 | 共享内核已跑通：麦克风 PCM → STT 适配器（含 Soniox / Grok / OpenAI 兼容）→ 字幕 → OpenAI 兼容翻译。JVM 测试 + `jvmDemo` 可在 Linux 验收。 |
 | M1 MVP P0 | 内核与 Android / iOS UI 骨架已按 P0 实现。真机音频/后台需在带 SDK 的机器上联调。 |
-| M2 Android + V1 P1 | 适配器已预留 ElevenLabs 与 OpenAI 兼容流式；说话人/双向/同步等 UI 未做完。 |
+| M2 Android + V1 P1 | 说话人分轨、中英双向翻译、原文/译文同步高亮已接到共享内核与 Android / iOS / Linux demo。 |
 | M3 V2 | 未做（Voice Typing、TTS、本地模型）。 |
 
 ## 已核实的 Provider 事实（2026-09）

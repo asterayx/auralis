@@ -12,6 +12,7 @@ import com.auralis.model.PromptTemplate
 import com.auralis.model.Session
 import com.auralis.model.SessionBundle
 import com.auralis.model.SessionMode
+import com.auralis.transcript.SpeakerRoster
 import com.auralis.pipeline.PipelineConfig
 import com.auralis.pipeline.PostProcessor
 import com.auralis.pipeline.SessionPipeline
@@ -82,9 +83,12 @@ class AuralisApp(
             val tr = resolve(profile.translationId) ?: ResolvedEndpoint(Presets.demoLlm, "")
             TranslationOrchestrator(
                 llm = factory.llm(tr),
-                targetLanguage = "en",
+                targetLanguage = settings.remoteLanguage,
                 glossary = settings.glossary,
                 clock = clock,
+                bidirectional = settings.bidirectional,
+                localLanguage = settings.localLanguage,
+                remoteLanguage = settings.remoteLanguage,
             )
         } else null
         val pipeline = SessionPipeline(
@@ -93,12 +97,16 @@ class AuralisApp(
             config = PipelineConfig(
                 mode = mode,
                 language = com.auralis.model.LanguageHint.ChineseEnglish,
+                targetLanguage = settings.remoteLanguage,
                 vocabulary = settings.vocabulary,
                 glossary = settings.glossary,
-                diarization = stt.capabilities.diarization,
-                preferNativeTranslation = profile.preferNativeTranslation,
+                diarization = settings.diarization && stt.capabilities.diarization,
+                preferNativeTranslation = profile.preferNativeTranslation && !settings.bidirectional,
                 previewInterimTranslation = profile.previewInterimTranslation,
                 keepAudio = settings.keepAudioDefault,
+                bidirectional = settings.bidirectional,
+                localLanguage = settings.localLanguage,
+                remoteLanguage = settings.remoteLanguage,
             ),
             clock = clock,
             fallbackStt = fallback,
@@ -149,6 +157,13 @@ class AuralisApp(
         sessions.editSegment(
             sessionId,
             EditOverlay(segmentId, text, clock.nowMs()),
+        )
+    }
+
+    suspend fun renameSpeaker(sessionId: String, speakerId: String, name: String) {
+        val bundle = sessions.get(sessionId) ?: return
+        sessions.upsert(
+            bundle.copy(speakers = SpeakerRoster.rename(bundle.speakers, speakerId, name)),
         )
     }
 

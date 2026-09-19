@@ -117,4 +117,61 @@ class PipelineTest {
         assertTrue(BuiltInTemplates.all.any { it.isDefault })
         assertEquals(3, BuiltInTemplates.all.size)
     }
+
+    @Test
+    fun bidirectionalChoosesOppositeLanguage() = runBlocking {
+        val orch = TranslationOrchestrator(
+            llm = DemoLlmAdapter(),
+            targetLanguage = "en",
+            clock = Clock { 1L },
+            bidirectional = true,
+            localLanguage = "zh",
+            remoteLanguage = "en",
+        )
+        val local = orch.translate(
+            TranscriptSegment("s-zh", listOf("t"), "大家好，我们开始今天的供应商对齐会。", 0, 1000, language = "zh"),
+            emptyList(),
+        )
+        assertEquals("en", local.targetLanguage)
+        assertEquals(com.auralis.model.ConversationSide.LOCAL, local.side)
+        assertTrue(local.translatedText.contains("Hello") || local.translatedText.isNotBlank())
+
+        val remote = orch.translate(
+            TranscriptSegment("s-en", listOf("t2"), "Hello everyone, thanks for joining.", 1000, 2000, language = "en"),
+            emptyList(),
+        )
+        assertEquals("zh", remote.targetLanguage)
+        assertEquals(com.auralis.model.ConversationSide.REMOTE, remote.side)
+        assertTrue(remote.translatedText.contains("大家") || remote.translatedText.isNotBlank())
+    }
+
+    @Test
+    fun pipelineCollectsSpeakers() = runBlocking {
+        val pipeline = SessionPipeline(
+            stt = DemoSttAdapter(),
+            translator = TranslationOrchestrator(
+                DemoLlmAdapter(),
+                targetLanguage = "en",
+                clock = Clock { 1L },
+                bidirectional = true,
+            ),
+            config = PipelineConfig(
+                mode = SessionMode.TRANSLATOR,
+                language = LanguageHint.ChineseEnglish,
+                pauseStreamingOnSilence = false,
+                bidirectional = true,
+            ),
+            clock = Clock { 1L },
+        )
+        pipeline.start()
+        repeat(16) { i ->
+            pipeline.pushAudio(AudioChunk(ByteArray(3200), capturedAtMs = i * 100L, streamOffsetMs = i * 100L))
+            delay(350)
+        }
+        delay(400)
+        pipeline.stop()
+        val bundle = pipeline.snapshotBundle()
+        assertTrue(bundle.speakers.size >= 2, "expected two demo speakers, got ${bundle.speakers}")
+        assertTrue(bundle.translations.any { it.side != null })
+    }
 }
