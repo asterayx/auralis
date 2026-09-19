@@ -6,9 +6,12 @@ import com.auralis.export.ExportFormat
 import com.auralis.export.formatTimestamp
 import com.auralis.model.BuiltInTemplates
 import com.auralis.model.SessionMode
+import com.auralis.model.SessionStatus
 import com.auralis.pipeline.LiveSync
 import com.auralis.pipeline.SessionPipeline
 import com.auralis.provider.Presets
+import kotlin.math.PI
+import kotlin.math.sin
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CoroutineScope
@@ -81,11 +84,50 @@ class DemoWebServer(
             jsonOk(exchange, snapshot())
         }
         server.createContext("/api/seek") { exchange ->
-            val segmentId = query(exchange)["segmentId"]
-            val saved = lastBundle()
-            val hit = saved?.segments?.firstOrNull { it.id == segmentId }
-            seekLabel.set(hit?.let { "跳转到 ${formatTimestamp(it.startMs)}" })
+            val params = query(exchange)
+            val segmentId = params["segmentId"]
+            val sessionId = params["sessionId"] ?: lastSessionId.get()
+            if (sessionId != null && segmentId != null) {
+                val state = kotlinx.coroutines.runBlocking { app.seekToSegment(sessionId, segmentId) }
+                seekLabel.set(state.label)
+            }
             jsonOk(exchange, snapshot())
+        }
+        server.createContext("/api/crash") { exchange ->
+            exchange.requestBody.close()
+            crashLive()
+            jsonOk(exchange, snapshot())
+        }
+        server.createContext("/api/catchup") { exchange ->
+            exchange.requestBody.close()
+            kotlinx.coroutines.runBlocking {
+                app.pendingSessions().forEach { session ->
+                    runCatching { app.catchUp(session.id) }.onSuccess { saved ->
+                        lastSessionId.set(saved.session.id)
+                        title.set(saved.session.title)
+                        notes.set(saved.postProcess.lastOrNull()?.content)
+                    }
+                }
+                lastSessionId.get()?.let { id ->
+                    if (notes.get() == null) {
+                        notes.set(app.postProcess(id).content)
+                    }
+                }
+            }
+            jsonOk(exchange, snapshot())
+        }
+        server.createContext("/api/audio") { exchange ->
+            val sessionId = query(exchange)["sessionId"] ?: lastSessionId.get()
+            val wav = sessionId?.let { app.audioWav(it) }
+            if (wav == null) {
+                exchange.sendResponseHeaders(404, -1)
+                exchange.close()
+            } else {
+                exchange.responseHeaders.add("Content-Type", "audio/wav")
+                exchange.responseHeaders.add("Cache-Control", "no-store")
+                exchange.sendResponseHeaders(200, wav.size.toLong())
+                exchange.responseBody.use { it.write(wav) }
+            }
         }
         server.executor = Executors.newCachedThreadPool()
         server.start()
@@ -105,14 +147,9 @@ class DemoWebServer(
             app.persist { it.copy(activeProfileId = Presets.demo.id, bidirectional = true, diarization = true) }
             val live = app.startLive(mode)
             pipeline.set(live)
+            lastSessionId.set(live.state.value.session.id)
             repeat(48) { i ->
-                live.pushAudio(
-                    AudioChunk(
-                        pcm16le = ByteArray(3200),
-                        capturedAtMs = System.currentTimeMillis(),
-                        streamOffsetMs = i * 100L,
-                    ),
-                )
+                app.feed(live, toneChunk(i * 100L))
                 delay(220)
             }
             delay(500)
@@ -122,6 +159,28 @@ class DemoWebServer(
             title.set(bundle.session.title)
             notes.set(app.postProcess(bundle.session.id).content)
         }
+    }
+
+    private fun crashLive() {
+        pump?.cancel()
+        val live = pipeline.getAndSet(null) ?: return
+        val saved = kotlinx.coroutines.runBlocking { app.abandonLive(live) }
+        lastSessionId.set(saved.session.id)
+        title.set(saved.session.title)
+        notes.set(null)
+        seekLabel.set("会话已中断，录音仍在本地。点「联网补转写」继续。")
+    }
+
+    private fun toneChunk(offsetMs: Long, durationMs: Long = 100): AudioChunk {
+        val samples = ((16_000 * durationMs) / 1000).toInt()
+        val pcm = ByteArray(samples * 2)
+        for (i in 0 until samples) {
+            val t = offsetMs / 1000.0 + i / 16_000.0
+            val v = (sin(2 * PI * 440.0 * t) * 4200).toInt()
+            pcm[i * 2] = (v and 0xff).toByte()
+            pcm[i * 2 + 1] = (v shr 8).toByte()
+        }
+        return AudioChunk(pcm, capturedAtMs = System.currentTimeMillis(), streamOffsetMs = offsetMs)
     }
 
     private fun lastBundle() = lastSessionId.get()?.let { kotlinx.coroutines.runBlocking { app.sessions.get(it) } }
@@ -136,10 +195,13 @@ class DemoWebServer(
         val saved = lastBundle()
         val savedLines = saved?.let { LiveSync.lines(it.segments, it.translations, it.speakers).map { line -> line.toDto(it.displayText(line.segment)) } }
         val usage = saved?.usage
+        val pending = kotlinx.coroutines.runBlocking { app.pendingSessions() }
+        val playback = app.playback.state.value
         return DemoStateDto(
             status = when {
                 live != null -> "live"
-                notes.get() != null -> "saved"
+                saved?.session?.status == SessionStatus.OFFLINE_PENDING -> "pending"
+                notes.get() != null || saved != null -> "saved"
                 else -> "idle"
             },
             mode = live?.session?.mode?.name ?: saved?.session?.mode?.name ?: "TRANSLATOR",
@@ -153,8 +215,11 @@ class DemoWebServer(
             title = title.get() ?: saved?.session?.title,
             export = saved?.let { app.export(it, ExportFormat.MARKDOWN) },
             exportTxt = saved?.let { app.export(it, ExportFormat.TXT) },
-            sessionId = saved?.session?.id ?: lastSessionId.get(),
-            seekLabel = seekLabel.get(),
+            sessionId = saved?.session?.id ?: live?.session?.id ?: lastSessionId.get(),
+            seekLabel = playback.label ?: seekLabel.get(),
+            seekMs = playback.positionMs,
+            pendingCount = pending.size,
+            sessionStatus = live?.session?.status?.name ?: saved?.session?.status?.name,
             usage = usage?.let {
                 "音频 ${"%.1f".format(it.audioMs / 60000.0)} 分钟 · " +
                     "LLM ${(it.llmInputTokens + it.translationInputTokens)}→${(it.llmOutputTokens + it.translationOutputTokens)} tokens" +
@@ -198,6 +263,7 @@ class DemoWebServer(
         direction = translation?.directionLabel,
         side = translation?.side?.name,
         startLabel = formatTimestamp(segment.startMs),
+        startMs = segment.startMs,
     )
 }
 
@@ -215,6 +281,9 @@ data class DemoStateDto(
     val exportTxt: String? = null,
     val sessionId: String? = null,
     val seekLabel: String? = null,
+    val seekMs: Long = 0,
+    val pendingCount: Int = 0,
+    val sessionStatus: String? = null,
     val usage: String? = null,
     val templates: List<TemplateDto> = emptyList(),
 )
@@ -235,4 +304,5 @@ data class LineDto(
     val direction: String? = null,
     val side: String? = null,
     val startLabel: String? = null,
+    val startMs: Long = 0,
 )

@@ -31,8 +31,8 @@ import androidx.compose.ui.unit.dp
 import com.auralis.app.AuralisApp
 import com.auralis.app.LibraryController
 import com.auralis.export.ExportFormat
-import com.auralis.export.formatTimestamp
 import com.auralis.model.SessionBundle
+import com.auralis.model.SessionStatus
 import com.auralis.pipeline.LiveSync
 import kotlinx.coroutines.launch
 
@@ -62,6 +62,14 @@ fun LibraryScreen(app: AuralisApp, modifier: Modifier = Modifier) {
             label = { Text("全文搜索") },
             modifier = Modifier.fillMaxWidth(),
         )
+        if (state.sessions.any { it.status == SessionStatus.OFFLINE_PENDING }) {
+            TextButton(onClick = {
+                scope.launch {
+                    app.pendingSessions().forEach { runCatching { app.catchUp(it.id) } }
+                    controller.refresh(query)
+                }
+            }) { Text("联网补转写待处理会话") }
+        }
         if (state.sessions.isEmpty()) {
             Text("还没有会话。到「转写」页录一段，或用演示配置先跑通。", Modifier.padding(top = 24.dp))
         }
@@ -69,7 +77,12 @@ fun LibraryScreen(app: AuralisApp, modifier: Modifier = Modifier) {
             items(state.sessions, key = { it.id }) { session ->
                 ListItem(
                     headlineContent = { Text(session.title) },
-                    supportingContent = { Text("${session.mode} · ${session.status}") },
+                    supportingContent = {
+                        Text(
+                            "${session.mode} · ${session.status}" +
+                                if (session.status == SessionStatus.OFFLINE_PENDING) " · 本地录音待补转写" else "",
+                        )
+                    },
                     modifier = Modifier.clickable { selectedId = session.id },
                 )
             }
@@ -88,6 +101,7 @@ private fun SessionDetailScreen(app: AuralisApp, sessionId: String, onBack: () -
     var editingId by remember { mutableStateOf<String?>(null) }
     var editDraft by remember { mutableStateOf("") }
     var selectedTemplate by remember { mutableStateOf(app.defaultTemplate()) }
+    val playback by app.playback.state.collectAsState()
     var seekLabel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(sessionId) { bundle = app.sessions.get(sessionId) }
     val current = bundle
@@ -105,6 +119,13 @@ private fun SessionDetailScreen(app: AuralisApp, sessionId: String, onBack: () -
         }
         Text(current.session.title, style = MaterialTheme.typography.headlineSmall)
         Text("${current.session.mode} · ${current.session.status}", color = Color(0xFF9AA3B5))
+        if (current.session.status == SessionStatus.OFFLINE_PENDING) {
+            TextButton(onClick = {
+                scope.launch {
+                    bundle = app.catchUp(sessionId)
+                }
+            }) { Text("联网补转写") }
+        }
         current.usage?.let { usage ->
             Text(
                 "用量（估算）：音频 ${"%.1f".format(usage.audioMs / 60000.0)} 分钟 · " +
@@ -130,15 +151,16 @@ private fun SessionDetailScreen(app: AuralisApp, sessionId: String, onBack: () -
             }
         }
         Text("转写 / 译文同步", style = MaterialTheme.typography.titleMedium)
-        Text("点一句跳到对应时间戳；编辑只写覆盖层，不改原始时间戳。", style = MaterialTheme.typography.bodySmall)
-        seekLabel?.let { Text(it, color = Color(0xFF7C9CFF), style = MaterialTheme.typography.bodySmall) }
+        Text("点一句跳到对应本地音频；编辑只写覆盖层，不改原始时间戳。", style = MaterialTheme.typography.bodySmall)
+        (playback.label ?: seekLabel)?.let { Text(it, color = Color(0xFF7C9CFF), style = MaterialTheme.typography.bodySmall) }
         LiveSync.lines(current.segments, current.translations, current.speakers).forEach { line ->
             Column(
                 Modifier
                     .clickable {
                         focusedId = line.segment.id
-                        seekLabel = "跳转到 ${formatTimestamp(line.segment.startMs)}" +
-                            if (current.session.audioPath != null) " · 本地音频已就绪" else " · 接入平台播放后生效"
+                        scope.launch {
+                            seekLabel = app.seekToSegment(sessionId, line.segment.id).label
+                        }
                     }
                     .padding(vertical = 6.dp),
             ) {

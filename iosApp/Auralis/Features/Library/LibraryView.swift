@@ -14,7 +14,7 @@ struct LibraryView: View {
                         Text(session.title).font(.headline)
                         Text("\(session.mode.rawValue) · \(session.status)")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(session.status == "OFFLINE_PENDING" ? Color.orange : .secondary)
                     }
                 }
             }
@@ -50,7 +50,10 @@ struct SessionDetailView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(session.title).font(.title2.bold())
                     Text("\(session.mode.rawValue) · \(session.status)")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(session.status == "OFFLINE_PENDING" ? Color.orange : .secondary)
+                    if session.status == "OFFLINE_PENDING" {
+                        Button("联网补转写") { store.catchUp(sessionId: sessionId) }
+                    }
                     if let usage = session.usage {
                         Text(String(format: "用量（估算）：音频 %.1f 分钟 · %d tokens · $%.2f（估算）", usage.audioMinutes, usage.tokens, usage.estimate))
                             .font(.footnote)
@@ -63,7 +66,7 @@ struct SessionDetailView: View {
                         }
                     }
                     Text("转写 / 译文同步").font(.headline)
-                    Text("点一句跳到对应时间戳。编辑只写覆盖层，不破坏时间戳。")
+                    Text("点一句跳到对应本地音频。编辑只写覆盖层，不破坏时间戳。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if let seekLabel {
@@ -89,7 +92,7 @@ struct SessionDetailView: View {
                             }
                             .onTapGesture {
                                 focusedId = caption.id
-                                seekLabel = "跳转到 00:00:0\(session.captions.firstIndex(where: { $0.id == caption.id }) ?? 0)"
+                                seekLabel = formatSeek(caption.startMs)
                             }
                         }
                     }
@@ -134,6 +137,14 @@ struct SessionDetailView: View {
             }
         }
         .navigationTitle("会话")
+    }
+
+    private func formatSeek(_ ms: Int) -> String {
+        let clamped = max(0, ms)
+        let hours = clamped / 3_600_000
+        let minutes = (clamped % 3_600_000) / 60_000
+        let seconds = (clamped % 60_000) / 1000
+        return String(format: "跳转到 %02d:%02d:%02d · 本地音频", hours, minutes, seconds)
     }
 
     private var exportMarkdown: String {

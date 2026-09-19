@@ -89,9 +89,20 @@ final class AppStore: ObservableObject {
         sessions = sessions.map { session in
             guard session.id == sessionId else { return session }
             var next = session
-            next.captions = next.captions.map { $0.id == captionId ? Caption(id: $0.id, text: text, speaker: $0.speaker, isFinal: $0.isFinal, direction: $0.direction) : $0 }
+            next.captions = next.captions.map { $0.id == captionId ? Caption(id: $0.id, text: text, speaker: $0.speaker, isFinal: $0.isFinal, direction: $0.direction, startMs: $0.startMs) : $0 }
             return next
         }
+    }
+
+    func catchUp(sessionId: String) {
+        sessions = sessions.map { session in
+            guard session.id == sessionId else { return session }
+            var next = session
+            next.status = "READY"
+            if next.title.hasPrefix("未完成") { next.title = "供应商对齐会" }
+            return next
+        }
+        lastStatus = "已从本地录音补转写"
     }
 
     func renameSpeaker(id: String, name: String) {
@@ -121,7 +132,8 @@ final class AppStore: ObservableObject {
             try? await Task.sleep(nanoseconds: 400_000_000)
             if case .running(let mode, var captions, _, var translations, _) = live {
                 let id = UUID().uuidString
-                captions.append(Caption(id: id, text: text, speaker: speaker, isFinal: true, direction: direction))
+                let starts = [400, 3400, 5800, 10000]
+                captions.append(Caption(id: id, text: text, speaker: speaker, isFinal: true, direction: direction, startMs: starts[min(captions.count, starts.count - 1)]))
                 translations[id] = translation
                 focusedCaptionId = id
                 live = .running(mode: mode, captions: captions, interim: "", translations: translations, error: nil)
@@ -144,6 +156,7 @@ struct Caption: Identifiable {
     let speaker: String
     let isFinal: Bool
     var direction: String = ""
+    var startMs: Int = 0
 }
 
 struct SpeakerTag: Identifiable, Hashable {
@@ -176,8 +189,8 @@ struct SessionSummary: Identifiable {
             status: "READY",
             updated: Date(),
             captions: [
-                Caption(id: "c1", text: "本周交期能否从十月十二日提前到十月八日？", speaker: "1", isFinal: true, direction: "zh → en"),
-                Caption(id: "c2", text: "We can pull in two days if the firmware freeze happens tonight.", speaker: "2", isFinal: true, direction: "en → zh"),
+                Caption(id: "c1", text: "本周交期能否从十月十二日提前到十月八日？", speaker: "1", isFinal: true, direction: "zh → en", startMs: 5800),
+                Caption(id: "c2", text: "We can pull in two days if the firmware freeze happens tonight.", speaker: "2", isFinal: true, direction: "en → zh", startMs: 10000),
             ],
             translations: [
                 "c1": "Can we pull delivery from 12 Oct to 8 Oct?",
@@ -191,6 +204,18 @@ struct SessionSummary: Identifiable {
             status: "READY",
             updated: Date().addingTimeInterval(-3600),
             usage: UsageSummary(audioMinutes: 42, tokens: 1200, estimate: 0.12)
+        ),
+        SessionSummary(
+            id: "d3",
+            title: "未完成录音（待补转写）",
+            mode: .translator,
+            status: "OFFLINE_PENDING",
+            updated: Date().addingTimeInterval(-120),
+            captions: [
+                Caption(id: "p1", text: "大家好，我们开始今天的供应商对齐会。", speaker: "1", isFinal: true, startMs: 400),
+            ],
+            translations: ["p1": "Hello everyone, let's start today's supplier alignment."],
+            usage: UsageSummary(audioMinutes: 0.4, tokens: 0, estimate: 0.0)
         ),
     ]
 }

@@ -13,7 +13,8 @@ class Segmenter {
     private var interims = listOf<TranscriptToken>()
 
     fun ingest(tokens: List<TranscriptToken>): Snapshot {
-        val incomingFinals = tokens.filter { it.isFinal }
+        val seen = finals.map { it.id }.toHashSet()
+        val incomingFinals = tokens.filter { it.isFinal && seen.add(it.id) }
         val incomingInterims = tokens.filter { !it.isFinal }
         if (incomingFinals.isNotEmpty()) {
             finals += incomingFinals

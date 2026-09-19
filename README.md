@@ -25,8 +25,8 @@
 
 | ID | 需求 | 状态 |
 | --- | --- | --- |
-| REC-1/2/3/4 | 麦克风、后台录音、边录边写、断网只录音 | 平台层接口 + iOS AVAudioEngine + Android FGS；管线断线补传 |
-| STT-1/2/3/4 | 临时词/定稿、语种、热词、时间戳 | `Segmenter` + 各 STT 适配器 |
+| REC-1/2/3/4 | 麦克风、后台录音、边录边写、断网只录音 | 平台层接口 + iOS AVAudioEngine + Android FGS；管线断线补传；会话检查点 + 重启后自动补转写 |
+| STT-1/2/3/4 | 临时词/定稿、语种、热词、时间戳、点击跳转音频 | `Segmenter` + 各 STT 适配器 + `AudioPlayback` |
 | TR-1/2/3 | 并排译文、按定稿句翻译、上下文+术语表 | `TranslationOrchestrator` |
 | PP-1/2 | 会后纪要模板 + 自定义模板 | `PostProcessor` + `BuiltInTemplates` |
 | LIB-1/2/3 | 会话库、LLM 自动标题、可编辑覆盖层、MD/TXT 导出与分享 | `JsonSessionRepository` + `SessionTitle` + `TranscriptExporter` |

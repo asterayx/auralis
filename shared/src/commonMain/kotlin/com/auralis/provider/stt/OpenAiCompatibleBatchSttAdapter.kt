@@ -2,6 +2,7 @@ package com.auralis.provider.stt
 
 import com.auralis.audio.AudioChunk
 import com.auralis.audio.EnergyVad
+import com.auralis.audio.Pcm
 import com.auralis.audio.Vad
 import com.auralis.core.newId
 import com.auralis.error.ProviderError
@@ -110,7 +111,7 @@ class OpenAiCompatibleBatchSttAdapter(
         override suspend fun close() {
             flush()
             job?.cancel()
-            _events.emit(SttEvent.Closed())
+            _events.emit(SttEvent.Closed(expected = true))
         }
 
         private suspend fun flush() {
@@ -121,7 +122,7 @@ class OpenAiCompatibleBatchSttAdapter(
             speech = false
             val bytes = pcm.toByteArray()
             pcm.clear()
-            val wav = pcm16ToWav(bytes, 16_000)
+            val wav = Pcm.toWav(bytes, 16_000)
             try {
                 val tokens = transcribeOnce(
                     client, resolved, json, path, wav, "slice.wav", config, sliceStartMs,
@@ -214,34 +215,7 @@ class OpenAiCompatibleBatchSttAdapter(
             )
         }
 
-        fun pcm16ToWav(pcm: ByteArray, sampleRate: Int, channels: Int = 1): ByteArray {
-            val header = ByteArray(44)
-            val byteRate = sampleRate * channels * 2
-            fun putStr(offset: Int, s: String) = s.forEachIndexed { i, c -> header[offset + i] = c.code.toByte() }
-            fun put32(offset: Int, v: Int) {
-                header[offset] = (v and 0xff).toByte()
-                header[offset + 1] = (v shr 8 and 0xff).toByte()
-                header[offset + 2] = (v shr 16 and 0xff).toByte()
-                header[offset + 3] = (v shr 24 and 0xff).toByte()
-            }
-            fun put16(offset: Int, v: Int) {
-                header[offset] = (v and 0xff).toByte()
-                header[offset + 1] = (v shr 8 and 0xff).toByte()
-            }
-            putStr(0, "RIFF")
-            put32(4, 36 + pcm.size)
-            putStr(8, "WAVE")
-            putStr(12, "fmt ")
-            put32(16, 16)
-            put16(20, 1)
-            put16(22, channels)
-            put32(24, sampleRate)
-            put32(28, byteRate)
-            put16(32, channels * 2)
-            put16(34, 16)
-            putStr(36, "data")
-            put32(40, pcm.size)
-            return header + pcm
-        }
+        fun pcm16ToWav(pcm: ByteArray, sampleRate: Int, channels: Int = 1): ByteArray =
+            Pcm.toWav(pcm, sampleRate, channels)
     }
 }

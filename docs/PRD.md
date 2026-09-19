@@ -34,7 +34,7 @@
 | 阶段 | 本仓库状态 |
 | --- | --- |
 | M0 技术验证 | 共享内核已跑通：麦克风 PCM → STT 适配器（含 Soniox / Grok / OpenAI 兼容）→ 字幕 → OpenAI 兼容翻译。JVM 测试 + `jvmDemo` 可在 Linux 验收。 |
-| M1 MVP P0 | 会话库编辑/导出/自动标题、模板库、用量、语种/热词/术语表、端点配置、JSON 持久化已接到共享内核与 Android / iOS / Linux demo。真机音频/后台需在带 SDK 的机器上联调。 |
+| M1 MVP P0 | 会话库编辑/导出/自动标题、模板库、用量、语种/热词/术语表、端点配置、JSON 持久化、崩溃恢复与联网补转写、点击字幕跳到本地音频已接到共享内核与 Android / iOS / Linux demo。真机音频/后台需在带 SDK 的机器上联调。 |
 | M2 Android + V1 P1 | 说话人分轨、中英双向翻译、原文/译文同步高亮已接到共享内核与 Android / iOS / Linux demo。 |
 | M3 V2 | 未做（Voice Typing、TTS、本地模型）。 |
 

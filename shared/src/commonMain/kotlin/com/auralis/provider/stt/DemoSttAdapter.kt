@@ -1,6 +1,8 @@
 package com.auralis.provider.stt
 
 import com.auralis.audio.AudioChunk
+import com.auralis.audio.Pcm
+import com.auralis.model.TranscriptToken
 import com.auralis.provider.SttCapabilities
 import com.auralis.transcript.newToken
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +35,27 @@ class DemoSttAdapter(
     )
 
     override suspend fun connect(config: SttSessionConfig): SttSession = DemoSession()
+
+    override suspend fun transcribeFile(
+        bytes: ByteArray,
+        fileName: String,
+        config: SttSessionConfig,
+    ): List<TranscriptToken> {
+        val pcm = Pcm.pcmFromContainer(bytes)
+        val durationMs = Pcm.durationMs(pcm)
+        val lines = if (durationMs <= 0) script else script.filter { it.startMs < durationMs }
+        return lines.mapIndexed { index, line ->
+            newToken(
+                text = line.text,
+                startMs = line.startMs,
+                endMs = line.endMs,
+                isFinal = true,
+                speakerId = line.speaker,
+                language = line.lang,
+                id = "tok-demo-$index",
+            )
+        }
+    }
 
     private class DemoSession : SttSession {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -87,14 +110,14 @@ class DemoSttAdapter(
                 )
                 delay(420)
             }
-            _events.emit(SttEvent.Closed("demo-finished"))
+            _events.emit(SttEvent.Closed("demo-finished", expected = true))
         }
 
         override suspend fun finalizeUtterance() = Unit
 
         override suspend fun close() {
             job?.cancel()
-            _events.emit(SttEvent.Closed("closed"))
+            _events.emit(SttEvent.Closed("closed", expected = true))
         }
     }
 

@@ -23,7 +23,7 @@ sealed class SttEvent {
     data class Tokens(val tokens: List<TranscriptToken>, val audioProcessedMs: Long? = null) : SttEvent()
     data class NativeTranslation(val tokens: List<TranscriptToken>) : SttEvent()
     data class SpeechEnded(val atMs: Long) : SttEvent()
-    data class Closed(val reason: String? = null) : SttEvent()
+    data class Closed(val reason: String? = null, val expected: Boolean = false) : SttEvent()
     data class Failed(val error: ProviderError) : SttEvent()
 }
 
