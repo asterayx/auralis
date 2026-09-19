@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Auralis 聆语 · 演示</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", sans-serif; background: #0b0d12; color: #e8edf7; }
+    header { padding: 28px 24px 12px; max-width: 1100px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .sub { color: #9aa3b5; line-height: 1.5; }
+    main { max-width: 1100px; margin: 0 auto; padding: 12px 24px 48px; display: grid; gap: 16px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button { background: #7c9cff; color: #0b0d12; border: 0; border-radius: 10px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    button.ghost { background: #1b2030; color: #e8edf7; }
+    .chip { display: inline-flex; align-items: center; gap: 8px; background: #141824; border-radius: 999px; padding: 6px 10px; font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .col { background: #141824; border-radius: 16px; padding: 14px; min-height: 280px; }
+    .col h2 { margin: 0 0 10px; font-size: 13px; color: #9aa3b5; font-weight: 600; }
+    .card { border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; background: #1b2030; cursor: pointer; }
+    .card.active { outline: 1px solid var(--accent, #7c9cff); background: #1e2740; }
+    .who { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .dir { color: #9aa3b5; font-weight: 500; margin-left: 8px; }
+    .tr { color: #9ad0b8; margin-top: 4px; }
+    .interim { color: #9aa3b5; font-style: italic; min-height: 1.4em; }
+    .notes { white-space: pre-wrap; background: #141824; border-radius: 16px; padding: 16px; }
+    .status { color: #7ddbb6; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Auralis 聆语</h1>
+    <p class="sub">本地优先 BYOK 语音工作台。这个预览用内置演示脚本跑通说话人分轨、中英双向翻译，以及原文/译文同步高亮。密钥不会离开你的设备。</p>
+  </header>
+  <main>
+    <div class="row">
+      <button onclick="start('translator')">开始双向翻译</button>
+      <button class="ghost" onclick="start('scribe')">只转写</button>
+      <span class="status" id="status">准备中…</span>
+    </div>
+    <div class="row" id="speakers"></div>
+    <p class="interim" id="interim"></p>
+    <div class="grid">
+      <section class="col">
+        <h2>原文</h2>
+        <div id="source"></div>
+      </section>
+      <section class="col">
+        <h2>译文</h2>
+        <div id="target"></div>
+      </section>
+    </div>
+    <section class="notes" id="notes">会后纪要会在演示结束后自动生成。</section>
+  </main>
+  <script>
+    let focused = null;
+    async function start(mode) {
+      focused = null;
+      await fetch('/api/start?mode=' + mode, { method: 'POST' });
+    }
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    }
+    function card(line, side) {
+      const active = line.id === focused ? ' active' : '';
+      const body = side === 'source' ? line.source : (line.translation || '…');
+      const dir = line.direction ? '<span class="dir">' + escapeHtml(line.direction) + '</span>' : '';
+      return '<div class="card' + active + '" style="--accent:' + line.color + '" onclick="focused=\'' + line.id + '\'; render(window.__last)">' +
+        '<div class="who" style="color:' + line.color + '">' + escapeHtml(line.speaker) + dir + '</div>' +
+        '<div class="' + (side === 'target' ? 'tr' : '') + '">' + escapeHtml(body) + '</div></div>';
+    }
+    function render(state) {
+      window.__last = state;
+      if (!focused) focused = state.focusedId;
+      document.getElementById('status').textContent =
+        state.status === 'live' ? '实时演示进行中' : (state.title ? '已保存：' + state.title : '空闲');
+      document.getElementById('interim').textContent = state.interim ? '临时词  ' + state.interim : '';
+      document.getElementById('speakers').innerHTML = state.speakers.map(function(s) {
+        return '<span class="chip"><span class="dot" style="background:' + s.color + '"></span>' + escapeHtml(s.name) + '</span>';
+      }).join('');
+      document.getElementById('source').innerHTML = state.lines.map(function(l) { return card(l, 'source'); }).join('');
+      document.getElementById('target').innerHTML = state.lines.map(function(l) { return card(l, 'target'); }).join('');
+      document.getElementById('notes').textContent = state.notes || state.export || '会后纪要会在演示结束后自动生成。';
+    }
+    async function tick() {
+      const state = await fetch('/api/state').then(function(r) { return r.json(); });
+      render(state);
+    }
+    tick();
+    setInterval(tick, 400);
+  </script>
+</body>
+</html>

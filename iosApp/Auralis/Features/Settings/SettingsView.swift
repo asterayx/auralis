@@ -46,6 +46,17 @@ struct SettingsView: View {
                     Toggle("崩溃上报（不含文本/音频/密钥）", isOn: .constant(false))
                     Toggle("录音前告知", isOn: $store.consentAcknowledged)
                 }
+                Section("翻译与说话人") {
+                    Toggle("双向翻译（本侧中文 ↔ 对侧英文）", isOn: $store.bidirectional)
+                    Toggle("说话人分轨", isOn: $store.diarization)
+                    Picker("翻译布局", selection: $store.layout) {
+                        Text("并排同步").tag(TranslationLayout.sideBySide)
+                        Text("上下堆叠").tag(TranslationLayout.stacked)
+                    }
+                    Text("点一句字幕，原文和译文会同步高亮。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Section("无障碍") {
                     Slider(value: $store.fontScale, in: 1...2, step: 0.1) {
                         Text("字幕字号 \(Int(store.fontScale * 100))%")

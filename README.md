@@ -32,6 +32,7 @@
 | LIB-1/2/3 | 会话库、可编辑覆盖层、MD/TXT 导出 | `SessionRepository` + `TranscriptExporter` |
 | KEY-1/2/3/4 | Keychain/Keystore、连通性测试、配置档、引导 | `SecureStore` + `Presets` + 引导页 |
 | COST-1 | 会话用量记录与估算 | `CostEstimator` |
+| UI-M2 | 说话人分轨、中英双向翻译、原文/译文同步 | `SpeakerRoster` + `TranslationOrchestrator` + Live / Library UI |
 | 适配器 | Soniox · Grok STT · OpenAI 兼容非流式 · ElevenLabs · OpenAI 兼容流式 · OpenAI 兼容 LLM | `provider/` |
 
 **能力协商**：每个 STT 适配器声明 `streaming / interim / timestamps / diarization / 热词 / 原生翻译`。UI 与管线按声明开启、降级或隐藏功能。
@@ -45,7 +46,13 @@
 ./gradlew :jvmDemo:run
 ```
 
-演示配置不需要 API Key，会脚本化输出中英字幕、翻译和纪要。
+默认打开 http://127.0.0.1:43173 的演示页（说话人、双向翻译、同步高亮）。终端脚本：
+
+```bash
+./gradlew :jvmDemo:run --args="--cli"
+```
+
+演示配置不需要 API Key。
 
 ## 打开客户端
 

@@ -2,6 +2,7 @@ package com.auralis.store
 
 import com.auralis.model.GlossaryEntry
 import com.auralis.model.PromptTemplate
+import com.auralis.model.TranslationLayout
 import com.auralis.provider.Presets
 import com.auralis.provider.ProviderEndpoint
 import com.auralis.provider.ProviderProfile
@@ -23,6 +24,11 @@ data class AppSettings(
     val highContrast: Boolean = false,
     val uiLanguage: String = "zh",
     val monthlyBudgetUsd: Double? = null,
+    val bidirectional: Boolean = true,
+    val translationLayout: TranslationLayout = TranslationLayout.SIDE_BY_SIDE,
+    val localLanguage: String = "zh",
+    val remoteLanguage: String = "en",
+    val diarization: Boolean = true,
 )
 
 interface SettingsStore {

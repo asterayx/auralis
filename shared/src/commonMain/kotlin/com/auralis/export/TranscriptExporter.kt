@@ -26,8 +26,12 @@ object TranscriptExporter {
         appendLine()
         appendLine("## Transcript")
         appendLine()
+        val speakers = bundle.speakers.associateBy { it.id }
         bundle.segments.filter { it.isFinal }.forEach { seg ->
-            val speaker = seg.speakerId?.let { "**S$it:** " } ?: ""
+            val speaker = seg.speakerId?.let { id ->
+                val name = speakers[id]?.displayName ?: "S$id"
+                "**$name:** "
+            } ?: ""
             appendLine("$speaker${bundle.displayText(seg)}")
             appendLine()
         }
@@ -35,7 +39,7 @@ object TranscriptExporter {
             appendLine("## Translation")
             appendLine()
             bundle.translations.filter { !it.isPreview }.forEach { tr ->
-                appendLine("- ${tr.sourceText}")
+                appendLine("- [${tr.directionLabel}] ${tr.sourceText}")
                 appendLine("  - ${tr.translatedText}")
                 appendLine()
             }
@@ -51,8 +55,11 @@ object TranscriptExporter {
     fun txt(bundle: SessionBundle): String = buildString {
         appendLine(bundle.session.title)
         appendLine()
+        val speakers = bundle.speakers.associateBy { it.id }
         bundle.segments.filter { it.isFinal }.forEach { seg ->
-            val speaker = seg.speakerId?.let { "S$it: " } ?: ""
+            val speaker = seg.speakerId?.let { id ->
+                "${speakers[id]?.displayName ?: "S$id"}: "
+            } ?: ""
             appendLine(speaker + bundle.displayText(seg))
         }
     }

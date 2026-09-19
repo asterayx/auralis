@@ -17,7 +17,17 @@ data class TranslatedSegment(
     val providerId: String,
     val model: String,
     val updatedAtMs: Long,
-)
+    val sourceLanguage: String? = null,
+    val targetLanguage: String? = null,
+    val side: ConversationSide? = null,
+) {
+    val directionLabel: String
+        get() {
+            val from = sourceLanguage ?: "?"
+            val to = targetLanguage ?: "?"
+            return "$from → $to"
+        }
+}
 
 enum class TranslationLayout {
     STACKED,

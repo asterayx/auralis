@@ -13,10 +13,12 @@ import com.auralis.model.Session
 import com.auralis.model.SessionBundle
 import com.auralis.model.SessionMode
 import com.auralis.model.SessionStatus
+import com.auralis.model.Speaker
 import com.auralis.model.TranscriptSegment
 import com.auralis.model.TranscriptToken
 import com.auralis.model.TranslatedSegment
 import com.auralis.model.UsageRecord
+import com.auralis.transcript.SpeakerRoster
 import com.auralis.provider.SttCapabilities
 import com.auralis.provider.stt.SttEvent
 import com.auralis.provider.stt.SttProvider
@@ -47,6 +49,9 @@ data class PipelineConfig(
     val previewInterimTranslation: Boolean = false,
     val pauseStreamingOnSilence: Boolean = true,
     val keepAudio: Boolean = true,
+    val bidirectional: Boolean = false,
+    val localLanguage: String = "zh",
+    val remoteLanguage: String = "en",
 )
 
 data class LivePipelineState(
@@ -54,6 +59,8 @@ data class LivePipelineState(
     val tokens: List<TranscriptToken> = emptyList(),
     val segments: List<TranscriptSegment> = emptyList(),
     val translations: List<TranslatedSegment> = emptyList(),
+    val speakers: List<Speaker> = emptyList(),
+    val focusedSegmentId: String? = null,
     val interimText: String = "",
     val statusMessage: String? = null,
     val lastError: ProviderError? = null,
@@ -147,6 +154,7 @@ class SessionPipeline(
             tokens = s.tokens,
             segments = s.segments,
             translations = s.translations,
+            speakers = s.speakers,
             usage = UsageRecord(
                 sessionId = s.session.id,
                 audioMs = s.audioMs,
@@ -166,8 +174,12 @@ class SessionPipeline(
                 nativeTranslationTarget = if (
                     config.mode == SessionMode.TRANSLATOR &&
                     config.preferNativeTranslation &&
-                    provider.capabilities.nativeTranslation
+                    provider.capabilities.nativeTranslation &&
+                    !config.bidirectional
                 ) config.targetLanguage else null,
+                twoWayLanguages = if (config.bidirectional) {
+                    config.localLanguage to config.remoteLanguage
+                } else null,
             ),
         )
         session = live
@@ -215,17 +227,21 @@ class SessionPipeline(
     private suspend fun onTokens(tokens: List<TranscriptToken>) {
         val snap = segmenter.ingest(tokens)
         val interim = snap.interimTokens.joinToString(" ") { it.text }
+        val finals = snap.segments.filter { seg -> seg.isFinal }
         _state.update {
+            val speakers = SpeakerRoster.fromSegments(finals, it.speakers)
             it.copy(
                 tokens = snap.finalTokens,
-                segments = snap.segments.filter { seg -> seg.isFinal },
+                segments = finals,
+                speakers = speakers,
+                focusedSegmentId = finals.lastOrNull()?.id ?: it.focusedSegmentId,
                 interimText = interim,
                 session = it.session.copy(updatedAtMs = clock.nowMs()),
             )
         }
         if (config.mode != SessionMode.TRANSLATOR || translator == null) return
-        val finals = snap.segments.filter { it.isFinal && it.id !in translatedIds }
-        for (seg in finals) {
+        val pending = finals.filter { it.id !in translatedIds }
+        for (seg in pending) {
             translatedIds += seg.id
             scope.launch { runTranslate(seg, snap.segments.filter { it.isFinal }) }
         }

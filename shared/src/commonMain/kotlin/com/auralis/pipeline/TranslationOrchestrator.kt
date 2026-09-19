@@ -2,7 +2,9 @@ package com.auralis.pipeline
 
 import com.auralis.core.Clock
 import com.auralis.error.ProviderError
+import com.auralis.model.ConversationSide
 import com.auralis.model.GlossaryEntry
+import com.auralis.model.LanguageDetect
 import com.auralis.model.TranscriptSegment
 import com.auralis.model.TranslatedSegment
 import com.auralis.provider.llm.ChatMessage
@@ -17,6 +19,9 @@ class TranslationOrchestrator(
     private val glossary: List<GlossaryEntry> = emptyList(),
     private val contextSentences: Int = 4,
     private val clock: Clock = Clock.System,
+    private val bidirectional: Boolean = false,
+    private val localLanguage: String = "zh",
+    private val remoteLanguage: String = "en",
 ) {
     private val done = LinkedHashMap<String, TranslatedSegment>()
     private val mutex = Mutex()
@@ -30,13 +35,14 @@ class TranslationOrchestrator(
     ): TranslatedSegment {
         val existing = mutex.withLock { done[segment.id] }
         if (existing != null && !existing.isPreview && !isPreview) return existing
+        val direction = resolveDirection(segment)
         val context = previous.takeLast(contextSentences)
         val glossaryBlock = if (glossary.isEmpty()) "" else
             "Glossary (must use these translations):\n" +
                 glossary.joinToString("\n") { "- ${it.source} → ${it.target}" }
         val contextBlock = context.joinToString("\n") { it.text }
         val prompt = buildString {
-            appendLine("Translate the LAST utterance into $targetLanguage.")
+            appendLine("Translate the LAST utterance into ${direction.targetLanguage}.")
             appendLine("Keep names, numbers, and glossary terms unchanged except for the specified target.")
             appendLine("Return only the translation, no quotes or labels.")
             if (glossaryBlock.isNotBlank()) {
@@ -74,6 +80,9 @@ class TranslationOrchestrator(
             providerId = llm.id,
             model = llm.model,
             updatedAtMs = clock.nowMs(),
+            sourceLanguage = direction.sourceLanguage,
+            targetLanguage = direction.targetLanguage,
+            side = direction.side,
         )
         mutex.withLock {
             val current = done[segment.id]
@@ -85,6 +94,7 @@ class TranslationOrchestrator(
     }
 
     fun ingestNative(segmentId: String, source: String, translated: String) {
+        val sourceLang = LanguageDetect.detect(source)
         done[segmentId] = TranslatedSegment(
             segmentId = segmentId,
             sourceText = source,
@@ -93,6 +103,36 @@ class TranslationOrchestrator(
             providerId = "native",
             model = "stt-native",
             updatedAtMs = clock.nowMs(),
+            sourceLanguage = sourceLang,
+            targetLanguage = LanguageDetect.counterpart(sourceLang, localLanguage, remoteLanguage),
+            side = if (LanguageDetect.sameFamily(sourceLang, localLanguage)) {
+                ConversationSide.LOCAL
+            } else {
+                ConversationSide.REMOTE
+            },
         )
     }
+
+    internal fun resolveDirection(segment: TranscriptSegment): Direction {
+        val detected = segment.language?.takeIf { it.isNotBlank() } ?: LanguageDetect.detect(segment.text)
+        if (!bidirectional) {
+            return Direction(
+                sourceLanguage = detected,
+                targetLanguage = targetLanguage,
+                side = ConversationSide.LOCAL,
+            )
+        }
+        val local = LanguageDetect.sameFamily(detected, localLanguage)
+        return Direction(
+            sourceLanguage = detected,
+            targetLanguage = if (local) remoteLanguage else localLanguage,
+            side = if (local) ConversationSide.LOCAL else ConversationSide.REMOTE,
+        )
+    }
+
+    data class Direction(
+        val sourceLanguage: String,
+        val targetLanguage: String,
+        val side: ConversationSide,
+    )
 }

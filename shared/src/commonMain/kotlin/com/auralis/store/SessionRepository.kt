@@ -5,6 +5,7 @@ import com.auralis.model.EditOverlay
 import com.auralis.model.Session
 import com.auralis.model.SessionBundle
 import com.auralis.model.SessionStatus
+import com.auralis.transcript.SpeakerRoster
 
 interface SessionRepository {
     suspend fun upsert(bundle: SessionBundle)
@@ -15,6 +16,7 @@ interface SessionRepository {
     suspend fun editSegment(sessionId: String, overlay: EditOverlay)
     suspend fun rename(sessionId: String, title: String)
     suspend fun setFolder(sessionId: String, folder: String?)
+    suspend fun renameSpeaker(sessionId: String, speakerId: String, name: String)
 }
 
 class InMemorySessionRepository(
@@ -65,6 +67,14 @@ class InMemorySessionRepository(
     override suspend fun setFolder(sessionId: String, folder: String?) {
         val current = data[sessionId] ?: return
         data[sessionId] = current.copy(session = current.session.copy(folder = folder, updatedAtMs = clock.nowMs()))
+    }
+
+    override suspend fun renameSpeaker(sessionId: String, speakerId: String, name: String) {
+        val current = data[sessionId] ?: return
+        data[sessionId] = current.copy(
+            speakers = SpeakerRoster.rename(current.speakers, speakerId, name),
+            session = current.session.copy(updatedAtMs = clock.nowMs()),
+        )
     }
 }
 
