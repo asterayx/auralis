@@ -71,9 +71,32 @@
 - `P12_PASSWORD`
 - `BUILD_PROVISION_PROFILE_BASE64` — `.mobileprovision` 的 base64
 
-`IOS_EXPORT_METHOD`：`development`（插线安装） / `ad-hoc`（指定 UDID） / `app-store`（TestFlight）。
+`IOS_EXPORT_METHOD`：`development`（插线） / `ad-hoc`（指定 UDID） / `app-store`（TestFlight 签名）。
 
-没有 GitHub 远程仓库时，先把本项目推上去再跑 workflow；产物在 Actions Artifacts 里的 `Auralis.ipa`。
+### 直接推到 TestFlight
+
+可以。TestFlight **只接受 App Store 签名的 IPA**，development / ad-hoc 包传不上去。
+
+在 Actions 里勾选 `upload_testflight`，或本机：
+
+```bash
+export IOS_EXPORT_METHOD=app-store
+bash iosApp/ci/build-ipa.sh
+bash iosApp/ci/upload-testflight.sh
+```
+
+额外 Secrets（App Store Connect → 用户和访问 → 集成 → App Store Connect API）：
+
+- `APP_STORE_CONNECT_KEY_ID`
+- `APP_STORE_CONNECT_ISSUER_ID`
+- `APP_STORE_CONNECT_API_KEY_P8`（`.p8` 原文或 base64）
+
+还要先在 Apple Developer 建好 Bundle ID `com.auralis.app`，并在 App Store Connect 建同名 App。证书必须是 **Apple Distribution**，描述文件必须是 **App Store**。处理完一般 5–15 分钟后出现在 TestFlight。
+
+```bash
+gh workflow run "iOS IPA" --ref cursor/auralis-byok-scribe-4672 \
+  -f export_method=app-store -f upload_testflight=true
+```
 
 ## Provider 预置
 

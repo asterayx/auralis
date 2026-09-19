@@ -1,7 +1,6 @@
 name: iOS IPA
 
-# Cloud macOS runner (GitHub-hosted) is the compiler.
-# This Linux Cloud Agent cannot produce a device-installable IPA.
+# Cloud macOS runner compiles and optionally uploads to TestFlight.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +9,10 @@ on:
         type: choice
         options: [development, ad-hoc, app-store]
         default: development
+      upload_testflight:
+        description: Upload the IPA to TestFlight (forces app-store signing)
+        type: boolean
+        default: false
   push:
     paths:
       - "iosApp/**"
@@ -18,10 +21,13 @@ on:
 jobs:
   ipa:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
-      IOS_EXPORT_METHOD: ${{ github.event.inputs.export_method || 'development' }}
+      IOS_EXPORT_METHOD: ${{ github.event.inputs.upload_testflight == 'true' && 'app-store' || github.event.inputs.export_method || 'development' }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +41,14 @@ jobs:
             echo "Missing GitHub secret DEVELOPMENT_TEAM (Apple Team ID)."
             echo "Also set BUILD_CERTIFICATE_BASE64, P12_PASSWORD, BUILD_PROVISION_PROFILE_BASE64."
             exit 1
+          fi
+          if [ "${{ github.event.inputs.upload_testflight }}" = "true" ] || [ "$IOS_EXPORT_METHOD" = "app-store" ]; then
+            if [ -z "${APP_STORE_CONNECT_KEY_ID}" ] || [ -z "${APP_STORE_CONNECT_ISSUER_ID}" ] || [ -z "${APP_STORE_CONNECT_API_KEY_P8}" ]; then
+              echo "TestFlight upload needs APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_API_KEY_P8."
+              if [ "${{ github.event.inputs.upload_testflight }}" = "true" ]; then
+                exit 1
+              fi
+            fi
           fi
 
       - name: Import certificate and profile
@@ -54,8 +68,7 @@ jobs:
           security create-keychain -p "$KC_PWD" "$KC"
           security set-keychain-settings -lut 21600 "$KC"
           security unlock-keychain -p "$KC_PWD" "$KC"
-          security import "$CERT" -P "$P12_PASSWORD" -A -t cert -f pk12 -k "$KC" || \
-            security import "$CERT" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security import "$CERT" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
           security set-key-partition-list -S apple-tool:,apple: -k "$KC_PWD" "$KC" >/dev/null
           security list-keychains -d user -s "$KC"
 
@@ -70,3 +83,9 @@ jobs:
           name: Auralis-ipa
           path: dist/ios/*.ipa
           if-no-files-found: error
+
+      - name: Upload to TestFlight
+        if: ${{ github.event.inputs.upload_testflight == 'true' }}
+        run: |
+          brew install fastlane
+          bash iosApp/ci/upload-testflight.sh

@@ -24,6 +24,11 @@ workflows:
           export DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:?set Team ID in Codemagic environment}"
           export IOS_EXPORT_METHOD="${IOS_EXPORT_METHOD:-development}"
           bash iosApp/ci/build-ipa.sh
+      - name: Upload TestFlight
+        script: |
+          if [ "${UPLOAD_TESTFLIGHT:-false}" = "true" ]; then
+            bash iosApp/ci/upload-testflight.sh
+          fi
     artifacts:
       - dist/ios/*.ipa
       - dist/ios/*.xcarchive

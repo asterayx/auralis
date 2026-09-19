@@ -6,7 +6,11 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IOS="$ROOT/iosApp"
 DIST="$ROOT/dist/ios"
 METHOD="${IOS_EXPORT_METHOD:-development}"
+if [[ "$METHOD" == "testflight" || "$METHOD" == "app-store-connect" ]]; then
+  METHOD="app-store"
+fi
 TEAM="${DEVELOPMENT_TEAM:-}"
+BUILD_NUMBER="${GITHUB_RUN_NUMBER:-${BUILD_NUMBER:-1}}"
 EXPORT_PLIST="$IOS/ExportOptions.${METHOD}.plist"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -41,6 +45,8 @@ xcodebuild \
   -destination "generic/platform=iOS" \
   -archivePath "$ARCHIVE" \
   DEVELOPMENT_TEAM="$TEAM" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}" \
   CODE_SIGN_STYLE=Manual \
   clean archive
 
