@@ -52,6 +52,29 @@
 - **Android**：安装 Android SDK，在 `local.properties` 写 `sdk.dir=`，然后 Android Studio 打开工程。`settings.gradle.kts` 检测到 SDK 后才会 include `:androidApp`。
 - **iOS / macOS**：`brew install xcodegen && cd iosApp && xcodegen generate && open Auralis.xcodeproj`。将 `shared` 以 Kotlin/Native framework 链入后，把 `AppStore` 换成 `AuralisApp`。
 
+## 云端 CI 打 iOS 安装包（IPA）
+
+这台 Cursor Cloud Agent 是 **Linux**，没有 Xcode，**不能在这里直接编出可装到 iPhone 的 IPA**。Apple 只允许在 macOS 上编译和签名。当前账号下也没有已连接的 Mac 自托管 Worker。
+
+可以走云端 **macOS 编译机**：
+
+| 方式 | 编译机 | 入口 |
+| --- | --- | --- |
+| GitHub Actions | `macos-15` + Xcode 16 | `.github/workflows/ios-ipa.yml`（手动 Run workflow） |
+| Codemagic | 云端 Mac mini | `codemagic.yaml` |
+| 自己的 Mac | 本机 Xcode | `bash iosApp/ci/build-ipa.sh` |
+
+装到真机还需要 Apple Developer 签名，在仓库 Secrets 里放：
+
+- `DEVELOPMENT_TEAM` — Team ID
+- `BUILD_CERTIFICATE_BASE64` — 发布/开发证书 `.p12` 的 base64
+- `P12_PASSWORD`
+- `BUILD_PROVISION_PROFILE_BASE64` — `.mobileprovision` 的 base64
+
+`IOS_EXPORT_METHOD`：`development`（插线安装） / `ad-hoc`（指定 UDID） / `app-store`（TestFlight）。
+
+没有 GitHub 远程仓库时，先把本项目推上去再跑 workflow；产物在 Actions Artifacts 里的 `Auralis.ipa`。
+
 ## Provider 预置
 
 | 槽位 | 预置 |

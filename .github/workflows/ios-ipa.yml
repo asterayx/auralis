@@ -1,0 +1,72 @@
+name: iOS IPA
+
+# Cloud macOS runner (GitHub-hosted) is the compiler.
+# This Linux Cloud Agent cannot produce a device-installable IPA.
+on:
+  workflow_dispatch:
+    inputs:
+      export_method:
+        description: IPA export method
+        type: choice
+        options: [development, ad-hoc, app-store]
+        default: development
+  push:
+    paths:
+      - "iosApp/**"
+      - ".github/workflows/ios-ipa.yml"
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      IOS_EXPORT_METHOD: ${{ github.event.inputs.export_method || 'development' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Require Apple signing secrets
+        run: |
+          if [ -z "${DEVELOPMENT_TEAM}" ]; then
+            echo "Missing GitHub secret DEVELOPMENT_TEAM (Apple Team ID)."
+            echo "Also set BUILD_CERTIFICATE_BASE64, P12_PASSWORD, BUILD_PROVISION_PROFILE_BASE64."
+            exit 1
+          fi
+
+      - name: Import certificate and profile
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          CERT="$RUNNER_TEMP/dist.p12"
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          KC="$RUNNER_TEMP/auralis.keychain-db"
+          KC_PWD="$(openssl rand -base64 24)"
+          mkdir -p "$PROFILE_DIR"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$CERT"
+          printf '%s' "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_DIR/auralis.mobileprovision"
+          security create-keychain -p "$KC_PWD" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PWD" "$KC"
+          security import "$CERT" -P "$P12_PASSWORD" -A -t cert -f pk12 -k "$KC" || \
+            security import "$CERT" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PWD" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Archive and export IPA
+        run: bash iosApp/ci/build-ipa.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Auralis-ipa
+          path: dist/ios/*.ipa
+          if-no-files-found: error
