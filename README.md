@@ -69,7 +69,7 @@
 
 | 方式 | 编译机 | 入口 |
 | --- | --- | --- |
-| GitHub Actions | `macos-15` + Xcode 16 | `.github/workflows/ios-ipa.yml`（手动 Run workflow） |
+| GitHub Actions | `macos-15` + Xcode 16 | `.github/workflows/ios-ipa.yml`（push 无签名密钥时只做 unsigned compile；手动 Run workflow 才打签名 IPA） |
 | Codemagic | 云端 Mac mini | `codemagic.yaml` |
 | 自己的 Mac | 本机 Xcode | `bash iosApp/ci/build-ipa.sh` |
 
