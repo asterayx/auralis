@@ -18,7 +18,7 @@ enum AppleAudioCaptureError: Error, LocalizedError {
 }
 
 /// REC-1 / REC-2 / REC-3: microphone capture, background audio session,
-/// and crash-safe file writer. PCM 16 kHz mono Int16 is forwarded to the KMP pipeline.
+/// and off-thread PCM file writer. PCM 16 kHz mono Int16 is forwarded to the KMP pipeline.
 ///
 /// Start order: session category → activate → new engine → input/output nodes →
 /// tap → prepare → start. `prepare`/`start` before the nodes exist throws
@@ -27,7 +27,8 @@ final class AppleAudioCapture: NSObject {
     private static let targetRate: Double = 16_000
 
     private var engine = AVAudioEngine()
-    private var file: AVAudioFile?
+    private let writeQueue = DispatchQueue(label: "com.auralis.audio.write")
+    private var writer: FileHandle?
     private var converter: AVAudioConverter?
     private var converterOutputFormat: AVAudioFormat?
     private var converterSourceFormat: AVAudioFormat?
@@ -41,6 +42,7 @@ final class AppleAudioCapture: NSObject {
 
     func start(sessionId: String, keepFile: Bool) throws {
         teardownEngine(deactivateSession: false)
+        closeWriter()
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
         try session.setActive(true)
@@ -90,12 +92,13 @@ final class AppleAudioCapture: NSObject {
         streamOffsetMs = 0
 
         if keepFile {
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(sessionId).caf")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(sessionId).pcm")
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            writer = try FileHandle(forWritingTo: url)
             lastFilePath = url.path
-            file = try AVAudioFile(forWriting: url, settings: pcm16.settings)
         } else {
+            closeWriter()
             lastFilePath = nil
-            file = nil
         }
 
         let bufferSize = AVAudioFrameCount(max(512, min(8_192, nodeFormat.sampleRate * 0.1)))
@@ -124,7 +127,7 @@ final class AppleAudioCapture: NSObject {
 
     func stop() {
         teardownEngine(deactivateSession: true)
-        file = nil
+        closeWriter()
         converter = nil
         converterOutputFormat = nil
         converterSourceFormat = nil
@@ -166,9 +169,6 @@ final class AppleAudioCapture: NSObject {
     private func handleTap(_ buffer: AVAudioPCMBuffer) {
         guard buffer.frameLength > 0 else { return }
         guard let pcm16 = toPcm16(buffer) else { return }
-        if let file {
-            try? file.write(from: pcm16)
-        }
         guard let channels = pcm16.int16ChannelData else { return }
         let frames = Int(pcm16.frameLength)
         let data = Data(bytes: channels[0], count: frames * MemoryLayout<Int16>.size)
@@ -176,6 +176,23 @@ final class AppleAudioCapture: NSObject {
         streamOffsetMs += Int64(frames) * 1_000 / Int64(Self.targetRate)
         onLevel?(Self.meterLevel(channels[0], frames: frames))
         onChunk?(data, offset)
+        enqueueWrite(data)
+    }
+
+    /// Never call AVAudioFile / FileHandle write on the tap thread (EXC_BREAKPOINT).
+    private func enqueueWrite(_ data: Data) {
+        writeQueue.async { [weak self] in
+            guard let writer = self?.writer else { return }
+            try? writer.write(contentsOf: data)
+        }
+    }
+
+    private func closeWriter() {
+        writeQueue.sync {
+            try? writer?.synchronize()
+            try? writer?.close()
+            writer = nil
+        }
     }
 
     private static func meterLevel(_ samples: UnsafePointer<Int16>, frames: Int) -> Float {
