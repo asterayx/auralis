@@ -307,6 +307,8 @@ final class AppStore: ObservableObject {
                 try self?.capture.start(sessionId: sessionId, keepFile: keepFile.boolValue)
                 return self?.capture.lastFilePath
             } catch {
+                print("AppleAudioCapture start failed: \(error.localizedDescription)")
+                self?.lastStatus = error.localizedDescription
                 return nil
             }
         }
