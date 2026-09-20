@@ -1,5 +1,7 @@
-import Foundation
+import AVFoundation
 import Combine
+import Foundation
+import Shared
 
 enum AppTab: Hashable {
     case library, scribe, translator, settings
@@ -9,17 +11,20 @@ enum TranslationLayout: String {
     case stacked, sideBySide
 }
 
-/// UI-facing store. On device this will wrap the KMP `AuralisApp` framework.
-/// Preview and first-run use the scripted demo so screens are reviewable without keys.
+/// UI-facing store. Wraps KMP `AuralisApp` the same way Android `AuralisRoot` does:
+/// live session, settings, and keys all go through the shared kernel.
 @MainActor
 final class AppStore: ObservableObject {
     @Published var onboarded: Bool
     @Published var tab: AppTab = .library
     @Published var sessions: [SessionSummary] = []
     @Published var live: LiveState = .idle
-    @Published var profiles: [Profile] = Profile.defaults
+    @Published var profiles: [Profile] = []
     @Published var activeProfileId: String = "profile-demo"
     @Published var lastStatus: String?
+    @Published var keyProbeStatus: String?
+    @Published var keyProbeOk: Bool?
+    @Published var modelCandidates: [String] = []
     @Published var fontScale: Double = 1.0
     @Published var consentAcknowledged: Bool = true
     @Published var bidirectional: Bool = true
@@ -33,73 +38,263 @@ final class AppStore: ObservableObject {
     @Published var keepAudio: Bool = true
     @Published var baseURL: String = ""
     @Published var modelName: String = ""
-    @Published var templates: [PromptTemplate] = PromptTemplate.defaults
+    @Published var templates: [PromptTemplate] = []
     @Published var defaultTemplateId: String = "tpl-meeting-notes"
+    @Published var endpoints: [Endpoint] = []
+    @Published var keyLinks: [KeyLinkItem] = []
+    @Published var grokNote: String = ""
+    @Published var inputLevel: Float = 0
+    @Published var waveform: [Float] = Array(repeating: 0, count: 32)
+
+    private let host: AppleAuralis
+    private let capture = AppleAudioCapture()
+    private var applyingSettings = false
+    private var probeTask: Task<Void, Never>?
 
     init() {
         onboarded = UserDefaults.standard.bool(forKey: "auralis.onboarded")
-        sessions = SessionSummary.demoLibrary
-        speakers = SpeakerTag.defaults
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("auralis", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        host = AppleAuralis.companion.create(documentsPath: dir.path)
+        grokNote = host.grokLanguageNote()
+        keyLinks = rows(host.keyLinks(), as: KeyLink.self).map { link in
+            KeyLinkItem(id: link.id, url: link.url)
+        }
+        bindAudio()
+        host.watchSettings { [weak self] settings in
+            Task { @MainActor in self?.apply(settings) }
+        }
+        host.load { [weak self] error in
+            Task { @MainActor in
+                if let error { self?.lastStatus = error }
+                self?.refreshLibrary()
+            }
+        }
+    }
+
+    deinit {
+        host.close()
     }
 
     func finishOnboarding(useDemo: Bool) {
         onboarded = true
-        activeProfileId = useDemo ? "profile-demo" : "profile-quality"
         UserDefaults.standard.set(true, forKey: "auralis.onboarded")
+        let id = useDemo ? host.demoProfileId() : host.qualityProfileId()
+        host.setActiveProfile(id: id) { _ in }
     }
 
     func start(mode: SessionMode) {
         focusedCaptionId = nil
+        resetInputMeter()
         live = .running(mode: mode, captions: [], interim: "", translations: [:], error: nil)
-        Task { await playDemo(mode: mode) }
+        Task { await startKernel(mode) }
     }
 
     func stop() {
-        if case .running(let mode, let captions, _, let translations, _) = live {
-            let title = captions.first?.text.prefix(32).description ?? "Untitled session"
-            sessions.insert(
-                SessionSummary(
-                    id: UUID().uuidString,
-                    title: String(title),
-                    mode: mode,
-                    status: "READY",
-                    updated: Date(),
-                    captions: captions,
-                    translations: translations,
-                    speakers: speakers,
-                    usage: UsageSummary(audioMinutes: 0.1, tokens: 80, estimate: 0.0)
-                ),
-                at: 0
-            )
+        host.finishLive { [weak self] error in
+            Task { @MainActor in
+                self?.live = .idle
+                self?.focusedCaptionId = nil
+                self?.resetInputMeter()
+                if let error { self?.lastStatus = error }
+                self?.refreshLibrary()
+            }
         }
-        live = .idle
-        focusedCaptionId = nil
+    }
+
+    func setProfile(_ id: String) {
+        guard !applyingSettings, id != activeProfileId else { return }
+        host.setActiveProfile(id: id) { _ in }
+    }
+
+    func setProfileSlots(sttId: String, translationId: String, postProcessId: String) {
+        guard !applyingSettings else { return }
+        host.setProfileSlots(
+            profileId: activeProfileId,
+            sttId: sttId,
+            translationId: translationId,
+            postProcessId: postProcessId
+        ) { _ in }
+    }
+
+    func scheduleModelProbe(endpointId: String, key: String) {
+        probeTask?.cancel()
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configured = endpoints.first(where: { $0.id == endpointId })?.configured == true
+        guard trimmed.count >= 8 || (trimmed.isEmpty && configured) else { return }
+        probeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            probeModels(endpointId: endpointId, key: trimmed)
+        }
+    }
+
+    func probeModels(endpointId: String, key: String) {
+        keyProbeStatus = "正在拉取模型列表…"
+        keyProbeOk = nil
+        host.probeModels(endpointId: endpointId, key: key) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.applyProbe(result, prefix: nil)
+            }
+        }
+    }
+
+    func setLanguage(_ label: String) {
+        guard !applyingSettings else { return }
+        host.setLanguage(label: label) { _ in }
+    }
+
+    func saveVocabulary() {
+        host.setVocabulary(csv: vocabulary) { _ in }
+    }
+
+    func saveGlossary() {
+        host.setGlossary(text: glossary) { _ in }
+    }
+
+    func setBidirectional(_ value: Bool) {
+        guard !applyingSettings else { return }
+        host.setBidirectional(value: value) { _ in }
+    }
+
+    func setDiarization(_ value: Bool) {
+        guard !applyingSettings else { return }
+        host.setDiarization(value: value) { _ in }
+    }
+
+    func setKeepAudio(_ value: Bool) {
+        guard !applyingSettings else { return }
+        host.setKeepAudio(value: value) { _ in }
+    }
+
+    func setLayout(_ value: TranslationLayout) {
+        guard !applyingSettings else { return }
+        host.setTranslationLayout(sideBySide: value == .sideBySide) { _ in }
+    }
+
+    func setFontScale(_ value: Double) {
+        guard !applyingSettings else { return }
+        host.setFontScale(value: Float(value)) { _ in }
+    }
+
+    func setConsent(_ value: Bool) {
+        guard !applyingSettings else { return }
+        host.setRecordingConsent(value: value) { _ in }
+    }
+
+    func saveKey(endpointId: String, key: String, onDone: @escaping (Bool) -> Void) {
+        keyProbeStatus = "正在保存并测试连通性…"
+        keyProbeOk = nil
+        host.updateEndpoint(endpointId: endpointId, baseUrl: baseURL, model: modelName) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                Task { @MainActor in
+                    self.keyProbeOk = false
+                    self.keyProbeStatus = "保存失败 · \(error)"
+                    onDone(false)
+                }
+                return
+            }
+            self.host.saveKey(endpointId: endpointId, key: key) { result in
+                Task { @MainActor in
+                    let ok = self.applyProbe(result, prefix: kbool(result.ok) ? "保存成功" : "保存失败")
+                    onDone(ok)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func applyProbe(_ result: AppleProbeResult, prefix: String?) -> Bool {
+        let ok = kbool(result.ok)
+        keyProbeOk = ok
+        let message = result.message
+        keyProbeStatus = prefix.map { "\($0) · \(message)" } ?? message
+        let models = stringList(result.models)
+        if !models.isEmpty {
+            modelCandidates = models
+            if modelName.isEmpty {
+                modelName = models[0]
+            }
+        }
+        return ok
+    }
+
+    func addTemplate(name: String, prompt: String) {
+        host.saveTemplate(name: name, prompt: prompt) { _ in }
+    }
+
+    func setDefaultTemplate(_ id: String) {
+        guard !applyingSettings else { return }
+        host.setDefaultTemplate(id: id) { _ in }
     }
 
     func search(_ query: String) -> [SessionSummary] {
         let q = query.lowercased()
         guard !q.isEmpty else { return sessions }
-        return sessions.filter {
-            $0.title.lowercased().contains(q) ||
-            $0.captions.contains { $0.text.lowercased().contains(q) }
+        return sessions.filter { $0.title.lowercased().contains(q) }
+    }
+
+    func refreshLibrary(query: String = "") {
+        host.listSessions(query: query) { [weak self] list in
+            Task { @MainActor in
+                self?.sessions = rows(list, as: AppleSessionRow.self).map { session in
+                    SessionSummary(
+                        id: session.id,
+                        title: session.title,
+                        mode: kbool(session.translator) ? .translator : .scribe,
+                        status: session.status,
+                        updated: Date(timeIntervalSince1970: kdouble(session.updatedAtMs) / 1000)
+                    )
+                }
+            }
         }
     }
 
-    func editCaption(sessionId: String, captionId: String, text: String) {
-        sessions = sessions.map { session in
-            guard session.id == sessionId else { return session }
-            var next = session
-            next.captions = next.captions.map { $0.id == captionId ? Caption(id: $0.id, text: text, speaker: $0.speaker, isFinal: $0.isFinal, direction: $0.direction) : $0 }
-            return next
+    func loadDetail(sessionId: String, completion: @escaping (SessionDetail?) -> Void) {
+        host.getSession(id: sessionId) { detail in
+            Task { @MainActor in
+                completion(detail.map(Self.mapDetail))
+            }
         }
     }
 
-    func renameSpeaker(id: String, name: String) {
-        speakers = speakers.map { $0.id == id ? SpeakerTag(id: $0.id, name: name, color: $0.color) : $0 }
-        sessions = sessions.map { session in
-            var next = session
-            next.speakers = next.speakers.map { $0.id == id ? SpeakerTag(id: $0.id, name: name, color: $0.color) : $0 }
-            return next
+    func editCaption(sessionId: String, captionId: String, text: String, completion: @escaping (SessionDetail?) -> Void) {
+        host.edit(sessionId: sessionId, segmentId: captionId, text: text) { [weak self] _ in
+            self?.loadDetail(sessionId: sessionId, completion: completion)
+        }
+    }
+
+    func renameSpeaker(sessionId: String, id: String, name: String, completion: @escaping (SessionDetail?) -> Void) {
+        host.renameSpeaker(sessionId: sessionId, speakerId: id, name: name) { [weak self] _ in
+            Task { @MainActor in
+                self?.speakers = self?.speakers.map {
+                    $0.id == id ? SpeakerTag(id: $0.id, name: name, color: $0.color) : $0
+                } ?? []
+            }
+            self?.loadDetail(sessionId: sessionId, completion: completion)
+        }
+    }
+
+    func generateNotes(sessionId: String, templateId: String, completion: @escaping (String) -> Void) {
+        host.postProcess(sessionId: sessionId, templateId: templateId) { notes, error in
+            Task { @MainActor in
+                completion(error ?? notes ?? "")
+            }
+        }
+    }
+
+    func exportOpen(sessionId: String, markdown: Bool, completion: @escaping (String) -> Void) {
+        host.exportOpen(sessionId: sessionId, markdown: markdown) { text in
+            Task { @MainActor in completion(text) }
+        }
+    }
+
+    func seekLabel(sessionId: String, segmentId: String, completion: @escaping (String?) -> Void) {
+        host.seekLabel(sessionId: sessionId, segmentId: segmentId) { label in
+            Task { @MainActor in completion(label) }
         }
     }
 
@@ -107,28 +302,223 @@ final class AppStore: ObservableObject {
         speakers.first { $0.id == id }
     }
 
-    private func playDemo(mode: SessionMode) async {
-        let script: [(String, String, String, String)] = [
-            ("大家好，我们开始今天的供应商对齐会。", "1", "Hello everyone, let's start today's supplier alignment.", "zh → en"),
-            ("Hello everyone, thanks for joining.", "2", "大家好，谢谢参加。", "en → zh"),
-            ("本周交期能否从十月十二日提前到十月八日？", "1", "Can we pull delivery from 12 Oct to 8 Oct?", "zh → en"),
-            ("We can pull in two days if the firmware freeze happens tonight.", "2", "如果今晚冻结固件，可以提前两天。", "en → zh"),
-        ]
-        for (text, speaker, translation, direction) in script {
-            if case .running(let mode, var captions, _, var translations, _) = live {
-                live = .running(mode: mode, captions: captions, interim: text, translations: translations, error: nil)
+    private func applyInputLevel(_ level: Float) {
+        guard case .running = live else { return }
+        inputLevel = level
+        var next = waveform
+        next.append(level)
+        if next.count > 32 {
+            next.removeFirst(next.count - 32)
+        }
+        waveform = next
+    }
+
+    private func resetInputMeter() {
+        inputLevel = 0
+        waveform = Array(repeating: 0, count: 32)
+    }
+
+    private func bindAudio() {
+        capture.onChunk = { [weak self] data, offset in
+            self?.host.audio.pushPcm(data: data as Data, streamOffsetMs: offset)
+        }
+        capture.onLevel = { [weak self] level in
+            Task { @MainActor in
+                self?.applyInputLevel(level)
             }
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if case .running(let mode, var captions, _, var translations, _) = live {
-                let id = UUID().uuidString
-                captions.append(Caption(id: id, text: text, speaker: speaker, isFinal: true, direction: direction))
-                translations[id] = translation
-                focusedCaptionId = id
-                live = .running(mode: mode, captions: captions, interim: "", translations: translations, error: nil)
+        }
+        host.audio.onStart = { [weak self] sessionId, keepFile in
+            do {
+                try self?.capture.start(sessionId: sessionId, keepFile: keepFile.boolValue)
+                return self?.capture.lastFilePath
+            } catch {
+                print("AppleAudioCapture start failed: \(error.localizedDescription)")
+                self?.lastStatus = error.localizedDescription
+                return nil
             }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        host.audio.onStop = { [weak self] in
+            self?.capture.stop()
         }
     }
+
+    private func startKernel(_ mode: SessionMode) async {
+        _ = await requestMic()
+        host.startLive(translator: mode == .translator, onSnapshot: { [weak self] snapshot in
+            Task { @MainActor in self?.applyLive(mode: mode, snapshot: snapshot) }
+        }, onReady: { [weak self] error in
+            Task { @MainActor in
+                if let error {
+                    self?.live = .running(mode: mode, captions: [], interim: "", translations: [:], error: error)
+                }
+            }
+        })
+    }
+
+    private func apply(_ settings: AppleSettingsSnapshot) {
+        applyingSettings = true
+        activeProfileId = settings.activeProfileId
+        profiles = rows(settings.profiles, as: AppleProfileRow.self).map { row in
+            Profile(
+                id: row.id,
+                name: row.name,
+                detail: row.detail,
+                sttId: row.sttId,
+                translationId: row.translationId,
+                postProcessId: row.postProcessId
+            )
+        }
+        endpoints = rows(settings.endpoints, as: AppleEndpointRow.self).map { row in
+            Endpoint(
+                id: row.id,
+                name: row.name,
+                baseURL: row.baseUrl,
+                model: row.model,
+                slot: row.slot,
+                configured: kbool(row.configured),
+                isDemo: kbool(row.isDemo)
+            )
+        }
+        languageLabel = settings.languageLabel
+        vocabulary = settings.vocabulary
+        glossary = settings.glossary
+        bidirectional = kbool(settings.bidirectional)
+        diarization = kbool(settings.diarization)
+        keepAudio = kbool(settings.keepAudio)
+        consentAcknowledged = kbool(settings.consent)
+        fontScale = kdouble(settings.fontScale)
+        layout = kbool(settings.sideBySide) ? .sideBySide : .stacked
+        templates = rows(settings.templates, as: AppleTemplateRow.self).map { row in
+            PromptTemplate(id: row.id, name: row.name, prompt: row.prompt, isBuiltIn: kbool(row.isBuiltIn))
+        }
+        defaultTemplateId = settings.defaultTemplateId
+        applyingSettings = false
+    }
+
+    private func applyLive(mode: SessionMode, snapshot: AppleLiveSnapshot) {
+        var translations: [String: String] = [:]
+        let captions: [Caption] = rows(snapshot.captions, as: AppleCaptionRow.self).map { row in
+            if let text = row.translation { translations[row.id] = text }
+            return Caption(
+                id: row.id,
+                text: row.text,
+                speaker: row.speaker,
+                isFinal: kbool(row.isFinal),
+                direction: row.direction
+            )
+        }
+        speakers = rows(snapshot.speakers, as: AppleSpeakerRow.self).map { row in
+            SpeakerTag(id: row.id, name: row.name, color: row.color)
+        }
+        focusedCaptionId = snapshot.focusedId ?? focusedCaptionId
+        live = .running(
+            mode: mode,
+            captions: captions,
+            interim: snapshot.interim,
+            translations: translations,
+            error: snapshot.error
+        )
+        lastStatus = snapshot.status
+    }
+
+    private static func mapDetail(_ detail: AppleSessionDetail) -> SessionDetail {
+        var translations: [String: String] = [:]
+        let captions: [Caption] = rows(detail.captions, as: AppleCaptionRow.self).map { row in
+            if let text = row.translation { translations[row.id] = text }
+            return Caption(
+                id: row.id,
+                text: row.text,
+                speaker: row.speaker,
+                isFinal: kbool(row.isFinal),
+                direction: row.direction
+            )
+        }
+        return SessionDetail(
+            id: detail.id,
+            title: detail.title,
+            mode: kbool(detail.translator) ? .translator : .scribe,
+            status: detail.status,
+            captions: captions,
+            translations: translations,
+            speakers: rows(detail.speakers, as: AppleSpeakerRow.self).map { row in
+                SpeakerTag(id: row.id, name: row.name, color: row.color)
+            },
+            usage: kbool(detail.hasUsage)
+                ? UsageSummary(
+                    audioMinutes: kdouble(detail.audioMinutes),
+                    tokens: Int(kdouble(detail.tokens)),
+                    estimate: kdouble(detail.estimate)
+                )
+                : nil,
+            notes: detail.notes,
+            audioReady: kbool(detail.audioReady)
+        )
+    }
+
+    private func requestMic() async -> Bool {
+        #if os(macOS)
+        await AVCaptureDevice.requestAccess(for: .audio)
+        #else
+        await AVAudioApplication.requestRecordPermission()
+        #endif
+    }
+}
+
+private func stringList(_ value: Any?) -> [String] {
+    guard let value else { return [] }
+    if let typed = value as? [String] { return typed }
+    if let ns = value as? NSArray {
+        return ns.compactMap { item in
+            if let text = item as? String { return text }
+            return String(describing: item).nilIfKotlinNull
+        }
+    }
+    if let enumerable = value as? NSFastEnumeration {
+        var out: [String] = []
+        var iterator = NSFastEnumerationIterator(enumerable)
+        while let element = iterator.next() {
+            if let text = element as? String {
+                out.append(text)
+            }
+        }
+        return out
+    }
+    return []
+}
+
+private extension String {
+    var nilIfKotlinNull: String? {
+        self == "null" ? nil : self
+    }
+}
+
+private func rows<T: AnyObject>(_ value: Any, as type: T.Type) -> [T] {
+    if let typed = value as? [T] { return typed }
+    if let ns = value as? NSArray { return ns.compactMap { $0 as? T } }
+    if let enumerable = value as? NSFastEnumeration {
+        var out: [T] = []
+        var iterator = NSFastEnumerationIterator(enumerable)
+        while let element = iterator.next() {
+            if let typed = element as? T { out.append(typed) }
+        }
+        return out
+    }
+    return []
+}
+
+private func kbool(_ value: Any) -> Bool {
+    if let flag = value as? Bool { return flag }
+    if let flag = value as? KotlinBoolean { return flag.boolValue }
+    return false
+}
+
+private func kdouble(_ value: Any) -> Double {
+    if let number = value as? NSNumber { return number.doubleValue }
+    if let number = value as? Double { return number }
+    if let number = value as? KotlinDouble { return number.doubleValue }
+    if let number = value as? KotlinLong { return number.doubleValue }
+    if let number = value as? KotlinInt { return number.doubleValue }
+    return 0
 }
 
 enum SessionMode: String { case scribe = "SCRIBE", translator = "TRANSLATOR" }
@@ -150,11 +540,6 @@ struct SpeakerTag: Identifiable, Hashable {
     let id: String
     var name: String
     let color: String
-
-    static let defaults = [
-        SpeakerTag(id: "1", name: "说话人 1", color: "7C9CFF"),
-        SpeakerTag(id: "2", name: "说话人 2", color: "7DDBB6"),
-    ]
 }
 
 struct SessionSummary: Identifiable {
@@ -163,36 +548,19 @@ struct SessionSummary: Identifiable {
     var mode: SessionMode
     var status: String
     var updated: Date
-    var captions: [Caption] = []
-    var translations: [String: String] = [:]
-    var speakers: [SpeakerTag] = SpeakerTag.defaults
-    var usage: UsageSummary? = UsageSummary(audioMinutes: 6.2, tokens: 640, estimate: 0.08)
+}
 
-    static let demoLibrary = [
-        SessionSummary(
-            id: "d1",
-            title: "供应商对齐会",
-            mode: .translator,
-            status: "READY",
-            updated: Date(),
-            captions: [
-                Caption(id: "c1", text: "本周交期能否从十月十二日提前到十月八日？", speaker: "1", isFinal: true, direction: "zh → en"),
-                Caption(id: "c2", text: "We can pull in two days if the firmware freeze happens tonight.", speaker: "2", isFinal: true, direction: "en → zh"),
-            ],
-            translations: [
-                "c1": "Can we pull delivery from 12 Oct to 8 Oct?",
-                "c2": "如果今晚冻结固件，可以提前两天。",
-            ]
-        ),
-        SessionSummary(
-            id: "d2",
-            title: "Firmware review",
-            mode: .scribe,
-            status: "READY",
-            updated: Date().addingTimeInterval(-3600),
-            usage: UsageSummary(audioMinutes: 42, tokens: 1200, estimate: 0.12)
-        ),
-    ]
+struct SessionDetail {
+    var id: String
+    var title: String
+    var mode: SessionMode
+    var status: String
+    var captions: [Caption]
+    var translations: [String: String]
+    var speakers: [SpeakerTag]
+    var usage: UsageSummary?
+    var notes: String
+    var audioReady: Bool
 }
 
 struct UsageSummary {
@@ -206,23 +574,28 @@ struct PromptTemplate: Identifiable {
     var name: String
     var prompt: String
     var isBuiltIn: Bool
-
-    static let defaults = [
-        PromptTemplate(id: "tpl-meeting-notes", name: "Meeting notes", prompt: "Summary / key points / actions / open questions", isBuiltIn: true),
-        PromptTemplate(id: "tpl-actions", name: "Action items", prompt: "Extract action items", isBuiltIn: true),
-        PromptTemplate(id: "tpl-polish", name: "Polish transcript", prompt: "Fix punctuation", isBuiltIn: true),
-    ]
 }
 
 struct Profile: Identifiable {
     let id: String
     let name: String
     let detail: String
+    let sttId: String
+    let translationId: String
+    let postProcessId: String
+}
 
-    static let defaults = [
-        Profile(id: "profile-demo", name: "Demo (no key)", detail: "Scripted captions for first-run"),
-        Profile(id: "profile-quality", name: "Client meeting — quality", detail: "Soniox + strong LLM"),
-        Profile(id: "profile-cheap", name: "Daily — save money", detail: "Grok STT (no Chinese) + small LLM"),
-        Profile(id: "profile-private", name: "Intranet — private endpoint", detail: "Custom Base URL"),
-    ]
+struct Endpoint: Identifiable {
+    let id: String
+    let name: String
+    let baseURL: String
+    let model: String
+    let slot: String
+    let configured: Bool
+    let isDemo: Bool
+}
+
+struct KeyLinkItem: Identifiable {
+    let id: String
+    let url: String
 }

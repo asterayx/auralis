@@ -59,7 +59,7 @@
 ## 打开客户端
 
 - **Android**：安装 Android SDK，在 `local.properties` 写 `sdk.dir=`，然后 Android Studio 打开工程。`settings.gradle.kts` 检测到 SDK 后才会 include `:androidApp`。
-- **iOS / macOS**：`brew install xcodegen && cd iosApp && xcodegen generate && open Auralis.xcodeproj`。将 `shared` 以 Kotlin/Native framework 链入后，把 `AppStore` 换成 `AuralisApp`。
+- **iOS / macOS**：`brew install xcodegen && cd iosApp && xcodegen generate && open Auralis.xcodeproj`。Xcode 预编译脚本会跑 `:shared:embedAndSignAppleFrameworkForXcode`，Swift `AppStore` 通过 `AppleAuralis` 调用共享 `AuralisApp` / `ConnectivityTester` / Keychain `SecureStore`（与 Android 同一条内核路径）。需要本机 JDK 21。
 
 ## 云端 CI 打 iOS 安装包（IPA）
 

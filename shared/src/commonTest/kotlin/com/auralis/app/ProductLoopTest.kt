@@ -124,6 +124,11 @@ class ProductLoopTest {
     }
 
     @Test
+    fun exportTimestampIsNativeSafe() {
+        assertTrue(formatTimestamp(1500).contains("00:00:01"))
+    }
+
+    @Test
     fun demoLlmTitlesTranscript() = runBlocking {
         val title = SessionTitle.generate(
             DemoLlmAdapter(),

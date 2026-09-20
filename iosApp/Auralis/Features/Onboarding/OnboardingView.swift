@@ -39,10 +39,16 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("申请 Key")
                 .font(.headline)
-            Text("Soniox → https://console.soniox.com")
-            Text("xAI / Grok → https://console.x.ai")
-            Text("Gemini → https://aistudio.google.com/apikey")
-            Text("硅基流动 → https://cloud.siliconflow.cn")
+            if store.keyLinks.isEmpty {
+                Text("Soniox → https://console.soniox.com")
+                Text("xAI / Grok → https://console.x.ai")
+                Text("Gemini → https://aistudio.google.com/apikey")
+                Text("硅基流动 → https://cloud.siliconflow.cn")
+            } else {
+                ForEach(store.keyLinks) { link in
+                    Text("\(link.id) → \(link.url)")
+                }
+            }
         }
         .font(.footnote)
         .foregroundStyle(.secondary)

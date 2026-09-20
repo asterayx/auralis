@@ -1,13 +1,16 @@
 package com.auralis.di
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
-fun createHttpClient(): HttpClient = HttpClient {
+expect fun createHttpClient(): HttpClient
+
+internal fun HttpClientConfig<*>.installAuralisPlugins() {
     install(WebSockets)
     install(HttpTimeout) {
         requestTimeoutMillis = 60_000

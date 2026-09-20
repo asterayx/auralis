@@ -16,6 +16,7 @@ struct LiveView: View {
                     Text(mode == .scribe ? "Scribe" : "双向翻译")
                         .foregroundStyle(.secondary)
                 }
+                AudioInputMeter(active: isLive, level: store.inputLevel, samples: store.waveform)
                 speakerLegend
                 if mode == .translator {
                     Picker("布局", selection: $store.layout) {
@@ -23,6 +24,9 @@ struct LiveView: View {
                         Text("上下堆叠").tag(TranslationLayout.stacked)
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: store.layout) { _, value in
+                        store.setLayout(value)
+                    }
                 }
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -36,6 +40,11 @@ struct LiveView: View {
             .padding()
             .navigationTitle(mode == .scribe ? "实时转写" : "实时翻译")
         }
+    }
+
+    private var isLive: Bool {
+        if case .running = store.live { return true }
+        return false
     }
 
     @ViewBuilder
@@ -137,5 +146,51 @@ struct LiveView: View {
             green: Double((value >> 8) & 0xFF) / 255,
             blue: Double(value & 0xFF) / 255
         )
+    }
+}
+
+/// Live mic level from the same PCM tap that feeds `AppleAudioBridge`.
+private struct AudioInputMeter: View {
+    let active: Bool
+    let level: Float
+    let samples: [Float]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: active ? "mic.fill" : "mic")
+                    .foregroundStyle(active ? Color.mint : Color.secondary)
+                Text(active ? "输入" : "点开始后显示输入")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(active ? "\(Int((level * 100).rounded()))%" : "—")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule()
+                        .fill(Color.mint)
+                        .frame(width: max(active ? 4 : 0, geo.size.width * CGFloat(level)))
+                }
+            }
+            .frame(height: 8)
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
+                    Capsule()
+                        .fill(active ? Color.mint.opacity(0.9) : Color.white.opacity(0.12))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: max(3, CGFloat(sample) * 28))
+                }
+            }
+            .frame(height: 28, alignment: .bottom)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+        .animation(.linear(duration: 0.08), value: level)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(active ? "麦克风输入 \(Int((level * 100).rounded()))%" : "未开始录音")
     }
 }

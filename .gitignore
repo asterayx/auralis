@@ -10,6 +10,7 @@ captures/
 *.apk
 xcuserdata/
 DerivedData/
+iosApp/Frameworks/
 *.xcuserstate
 .cursor/
 agent-tools/
