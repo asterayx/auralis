@@ -20,12 +20,13 @@ enum AppleAudioCaptureError: Error, LocalizedError {
 /// REC-1 / REC-2 / REC-3: microphone capture, background audio session,
 /// and crash-safe file writer. PCM 16 kHz mono Int16 is forwarded to the KMP pipeline.
 ///
-/// `installTap` must use the input node's format (or nil). Passing 16 kHz Int16
-/// throws `com.apple.coreaudio.avfaudio` "format mismatch" and kills the process.
+/// Start order: session category → activate → new engine → input/output nodes →
+/// tap → prepare → start. `prepare`/`start` before the nodes exist throws
+/// `inputNode != nullptr || outputNode != nullptr` (NSException, not Swift Error).
 final class AppleAudioCapture: NSObject {
     private static let targetRate: Double = 16_000
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var converterOutputFormat: AVAudioFormat?
@@ -37,14 +38,37 @@ final class AppleAudioCapture: NSObject {
     var onChunk: ((Data, Int64) -> Void)?
 
     func start(sessionId: String, keepFile: Bool) throws {
-        stop()
+        teardownEngine(deactivateSession: false)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
         try session.setActive(true)
-        engine.prepare()
 
-        let input = engine.inputNode
-        let nodeFormat = input.outputFormat(forBus: 0)
+        engine = AVAudioEngine()
+        let input: AVAudioInputNode
+        let nodeFormat: AVAudioFormat
+        do {
+            var resolvedInput: AVAudioInputNode?
+            var resolvedFormat: AVAudioFormat?
+            try runEngine {
+                // Access both I/O nodes before prepare/start so the graph exists.
+                let node = self.engine.inputNode
+                _ = self.engine.outputNode
+                let format = node.outputFormat(forBus: 0)
+                if format.sampleRate > 0, format.channelCount > 0 {
+                    self.engine.connect(node, to: self.engine.mainMixerNode, format: format)
+                    self.engine.mainMixerNode.outputVolume = 0
+                }
+                resolvedInput = node
+                resolvedFormat = format
+            }
+            guard let readyInput = resolvedInput, let format = resolvedFormat else {
+                throw AppleAudioCaptureError.invalidInputFormat
+            }
+            input = readyInput
+            nodeFormat = format
+        } catch {
+            throw AppleAudioCaptureError.tapFailed(error.localizedDescription)
+        }
         guard nodeFormat.sampleRate > 0, nodeFormat.channelCount > 0 else {
             throw AppleAudioCaptureError.invalidInputFormat
         }
@@ -74,7 +98,7 @@ final class AppleAudioCapture: NSObject {
 
         let bufferSize = AVAudioFrameCount(max(512, min(8_192, nodeFormat.sampleRate * 0.1)))
         do {
-            try AuralisExceptionCatcher.run {
+            try runEngine {
                 // nil = node's current format. Never pass 16 kHz Int16 here.
                 input.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
                     self?.handleTap(buffer)
@@ -86,25 +110,55 @@ final class AppleAudioCapture: NSObject {
         tapInstalled = true
 
         do {
-            try engine.start()
+            try runEngine {
+                self.engine.prepare()
+                try self.engine.start()
+            }
         } catch {
             removeTapSafely()
-            throw error
+            throw AppleAudioCaptureError.tapFailed(error.localizedDescription)
         }
     }
 
     func stop() {
-        removeTapSafely()
-        if engine.isRunning {
-            engine.stop()
-        }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        teardownEngine(deactivateSession: true)
         file = nil
         converter = nil
         converterOutputFormat = nil
         converterSourceFormat = nil
         pcm16Format = nil
         streamOffsetMs = 0
+    }
+
+    /// NSException from AVAudioEngine is not a Swift Error. Catch both.
+    private func runEngine(_ body: () throws -> Void) throws {
+        var thrown: Error?
+        try AuralisExceptionCatcher.run {
+            do {
+                try body()
+            } catch {
+                thrown = error
+            }
+        }
+        if let thrown { throw thrown }
+    }
+
+    private func teardownEngine(deactivateSession: Bool) {
+        let old = engine
+        let hadTap = tapInstalled
+        tapInstalled = false
+        try? runEngine {
+            if hadTap {
+                old.inputNode.removeTap(onBus: 0)
+            }
+            if old.isRunning {
+                old.stop()
+            }
+            old.reset()
+        }
+        if deactivateSession {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func handleTap(_ buffer: AVAudioPCMBuffer) {
@@ -198,7 +252,7 @@ final class AppleAudioCapture: NSObject {
     private func removeTapSafely() {
         guard tapInstalled else { return }
         tapInstalled = false
-        try? AuralisExceptionCatcher.run {
+        try? runEngine {
             self.engine.inputNode.removeTap(onBus: 0)
         }
     }
