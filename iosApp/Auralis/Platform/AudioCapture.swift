@@ -36,6 +36,8 @@ final class AppleAudioCapture: NSObject {
     private var streamOffsetMs: Int64 = 0
     private(set) var lastFilePath: String?
     var onChunk: ((Data, Int64) -> Void)?
+    /// 0…1 peak/RMS from the same Int16 PCM sent to `onChunk`. Audio-thread callback.
+    var onLevel: ((Float) -> Void)?
 
     func start(sessionId: String, keepFile: Bool) throws {
         teardownEngine(deactivateSession: false)
@@ -172,7 +174,22 @@ final class AppleAudioCapture: NSObject {
         let data = Data(bytes: channels[0], count: frames * MemoryLayout<Int16>.size)
         let offset = streamOffsetMs
         streamOffsetMs += Int64(frames) * 1_000 / Int64(Self.targetRate)
+        onLevel?(Self.meterLevel(channels[0], frames: frames))
         onChunk?(data, offset)
+    }
+
+    private static func meterLevel(_ samples: UnsafePointer<Int16>, frames: Int) -> Float {
+        guard frames > 0 else { return 0 }
+        var peak: Float = 0
+        var sum: Float = 0
+        for i in 0..<frames {
+            let sample = Float(samples[i]) / 32_768
+            let absSample = abs(sample)
+            if absSample > peak { peak = absSample }
+            sum += sample * sample
+        }
+        let rms = sqrt(sum / Float(frames))
+        return min(1, max(peak, rms * 3))
     }
 
     private func toPcm16(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

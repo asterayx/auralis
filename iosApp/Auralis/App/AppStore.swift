@@ -43,6 +43,8 @@ final class AppStore: ObservableObject {
     @Published var endpoints: [Endpoint] = []
     @Published var keyLinks: [KeyLinkItem] = []
     @Published var grokNote: String = ""
+    @Published var inputLevel: Float = 0
+    @Published var waveform: [Float] = Array(repeating: 0, count: 32)
 
     private let host: AppleAuralis
     private let capture = AppleAudioCapture()
@@ -84,6 +86,7 @@ final class AppStore: ObservableObject {
 
     func start(mode: SessionMode) {
         focusedCaptionId = nil
+        resetInputMeter()
         live = .running(mode: mode, captions: [], interim: "", translations: [:], error: nil)
         Task { await startKernel(mode) }
     }
@@ -93,6 +96,7 @@ final class AppStore: ObservableObject {
             Task { @MainActor in
                 self?.live = .idle
                 self?.focusedCaptionId = nil
+                self?.resetInputMeter()
                 if let error { self?.lastStatus = error }
                 self?.refreshLibrary()
             }
@@ -298,9 +302,30 @@ final class AppStore: ObservableObject {
         speakers.first { $0.id == id }
     }
 
+    private func applyInputLevel(_ level: Float) {
+        guard case .running = live else { return }
+        inputLevel = level
+        var next = waveform
+        next.append(level)
+        if next.count > 32 {
+            next.removeFirst(next.count - 32)
+        }
+        waveform = next
+    }
+
+    private func resetInputMeter() {
+        inputLevel = 0
+        waveform = Array(repeating: 0, count: 32)
+    }
+
     private func bindAudio() {
         capture.onChunk = { [weak self] data, offset in
             self?.host.audio.pushPcm(data: data as Data, streamOffsetMs: offset)
+        }
+        capture.onLevel = { [weak self] level in
+            Task { @MainActor in
+                self?.applyInputLevel(level)
+            }
         }
         host.audio.onStart = { [weak self] sessionId, keepFile in
             do {
