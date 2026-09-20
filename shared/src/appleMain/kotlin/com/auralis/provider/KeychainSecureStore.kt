@@ -8,7 +8,10 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreFoundation.CFRelease
 import platform.CoreFoundation.CFTypeRefVar
+import platform.Foundation.CFBridgingRetain
+import platform.Foundation.NSCopyingProtocol
 import platform.Foundation.NSData
 import platform.Foundation.NSMutableDictionary
 import platform.Foundation.NSNumber
@@ -27,9 +30,9 @@ import platform.Security.errSecSuccess
 /**
  * KEY-1: API keys live in the Apple Keychain, never in the JSON library.
  *
- * Kotlin/Native cannot `as? NSString` the Security `CFStringRef` constants
- * (`kSecClass`, …) — that was "missing security attribute key". Use the
- * documented SecItem string keys instead; they are what those CFSTR()s are.
+ * Security `kSec*` symbols are CFStringRef C pointers. Kotlin/Native cannot
+ * `as? NSString` them ("missing security attribute key"). Use the documented
+ * SecItem string names as NSString keys on NSMutableDictionary.
  *
  * @see https://developer.apple.com/documentation/security/ksecclass
  */
@@ -40,16 +43,18 @@ class KeychainSecureStore(
     override suspend fun put(alias: String, secret: String) {
         val data = (secret as NSString).dataUsingEncoding(NSUTF8StringEncoding)
             ?: error("Keychain put failed: could not encode secret")
-        when (val added = SecItemAdd(addQuery(alias, data).asCf(), null)) {
+        when (val added = addQuery(alias, data).useCf { SecItemAdd(it, null) }) {
             errSecSuccess -> return
             errSecDuplicateItem -> {
-                val updated = SecItemUpdate(baseQuery(alias).asCf(), updateAttrs(data).asCf())
+                val updated = baseQuery(alias).useCf { query ->
+                    updateAttrs(data).useCf { attrs -> SecItemUpdate(query, attrs) }
+                }
                 if (updated == errSecSuccess) return
                 error(secMessage("update", updated))
             }
             else -> {
                 delete(alias)
-                val retry = SecItemAdd(addQuery(alias, data).asCf(), null)
+                val retry = addQuery(alias, data).useCf { SecItemAdd(it, null) }
                 if (retry == errSecSuccess || retry == errSecDuplicateItem) return
                 error(secMessage("put", retry))
             }
@@ -58,11 +63,11 @@ class KeychainSecureStore(
 
     override suspend fun get(alias: String): String? = runCatching {
         val query = baseQuery(alias)
-        query.setObject(NSNumber.numberWithBool(true), forKey = KEY_RETURN_DATA)
-        query.setObject(VAL_MATCH_ONE, forKey = KEY_MATCH_LIMIT)
+        query.setObject(NSNumber(bool = true), forKey = ns(KEY_RETURN_DATA))
+        query.setObject(ns(VAL_MATCH_ONE), forKey = ns(KEY_MATCH_LIMIT))
         memScoped {
             val out = alloc<CFTypeRefVar>()
-            val status = SecItemCopyMatching(query.asCf(), out.ptr)
+            val status = query.useCf { SecItemCopyMatching(it, out.ptr) }
             if (status == errSecItemNotFound || status != errSecSuccess) return@memScoped null
             val data = out.value as? NSData ?: return@memScoped null
             data.utf8String()
@@ -70,7 +75,7 @@ class KeychainSecureStore(
     }.getOrNull()
 
     override suspend fun delete(alias: String) {
-        val status = SecItemDelete(baseQuery(alias).asCf())
+        val status = baseQuery(alias).useCf { SecItemDelete(it) }
         if (status != errSecSuccess && status != errSecItemNotFound) {
             println("Keychain delete: ${secMessage("delete", status)}")
         }
@@ -78,28 +83,30 @@ class KeychainSecureStore(
 
     private fun baseQuery(alias: String): NSMutableDictionary {
         val query = NSMutableDictionary()
-        query.setObject(VAL_GENERIC_PASSWORD, forKey = KEY_CLASS)
-        query.setObject(service, forKey = KEY_SERVICE)
-        query.setObject(alias, forKey = KEY_ACCOUNT)
+        query.setObject(ns(VAL_GENERIC_PASSWORD), forKey = ns(KEY_CLASS))
+        query.setObject(ns(service), forKey = ns(KEY_SERVICE))
+        query.setObject(ns(alias), forKey = ns(KEY_ACCOUNT))
         return query
     }
 
     private fun addQuery(alias: String, data: NSData): NSMutableDictionary {
         val query = baseQuery(alias)
-        query.setObject(data, forKey = KEY_VALUE_DATA)
-        query.setObject(VAL_AFTER_FIRST_UNLOCK, forKey = KEY_ACCESSIBLE)
+        query.setObject(data, forKey = ns(KEY_VALUE_DATA))
+        query.setObject(ns(VAL_AFTER_FIRST_UNLOCK), forKey = ns(KEY_ACCESSIBLE))
         return query
     }
 
     private fun updateAttrs(data: NSData): NSMutableDictionary {
         val attrs = NSMutableDictionary()
-        attrs.setObject(data, forKey = KEY_VALUE_DATA)
-        attrs.setObject(VAL_AFTER_FIRST_UNLOCK, forKey = KEY_ACCESSIBLE)
+        attrs.setObject(data, forKey = ns(KEY_VALUE_DATA))
+        attrs.setObject(ns(VAL_AFTER_FIRST_UNLOCK), forKey = ns(KEY_ACCESSIBLE))
         return attrs
     }
 }
 
-// SecItem.h CFSTR values — NSString keys work with NSMutableDictionary on KN.
+// SecItem.h CFSTR values. NSMutableDictionary.setObject(forKey:) needs
+// NSCopyingProtocol keys — Kotlin String is not that type. NSNumber.numberWithBool
+// is not in the KN Foundation bindings; use the bool constructor instead.
 private const val KEY_CLASS = "class"
 private const val KEY_SERVICE = "svce"
 private const val KEY_ACCOUNT = "acct"
@@ -111,8 +118,17 @@ private const val VAL_GENERIC_PASSWORD = "genp"
 private const val VAL_AFTER_FIRST_UNLOCK = "ck"
 private const val VAL_MATCH_ONE = "m_LimitOne"
 
+private fun ns(value: String): NSCopyingProtocol = value as NSString
+
 @OptIn(ExperimentalForeignApi::class)
-private fun NSMutableDictionary.asCf(): CFDictionaryRef? = this as CFDictionaryRef?
+private inline fun <T> NSMutableDictionary.useCf(block: (CFDictionaryRef?) -> T): T {
+    val cf = CFBridgingRetain(this) as CFDictionaryRef?
+    return try {
+        block(cf)
+    } finally {
+        if (cf != null) CFRelease(cf)
+    }
+}
 
 @OptIn(ExperimentalForeignApi::class)
 private fun NSData.utf8String(): String {
