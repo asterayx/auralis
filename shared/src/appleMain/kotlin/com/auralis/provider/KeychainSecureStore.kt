@@ -8,11 +8,10 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.CoreFoundation.CFDictionaryRef
-import platform.CoreFoundation.CFStringRef
 import platform.CoreFoundation.CFTypeRefVar
-import platform.CoreFoundation.kCFBooleanTrue
 import platform.Foundation.NSData
 import platform.Foundation.NSMutableDictionary
+import platform.Foundation.NSNumber
 import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.dataUsingEncoding
@@ -20,26 +19,19 @@ import platform.posix.memcpy
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
+import platform.Security.SecItemUpdate
 import platform.Security.errSecDuplicateItem
 import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
-import platform.Security.kSecAttrAccessible
-import platform.Security.kSecAttrAccessibleAfterFirstUnlock
-import platform.Security.kSecAttrAccount
-import platform.Security.kSecAttrService
-import platform.Security.kSecClass
-import platform.Security.kSecClassGenericPassword
-import platform.Security.kSecMatchLimit
-import platform.Security.kSecMatchLimitOne
-import platform.Security.kSecReturnData
-import platform.Security.kSecValueData
 
 /**
  * KEY-1: API keys live in the Apple Keychain, never in the JSON library.
- * Account names are the aliases [secretAlias] already prefixes (`auralis.provider.<id>`).
  *
- * Queries must be real [NSMutableDictionary]s. A Kotlin [Map] retained via
- * CFBridgingRetain is not a valid SecItem dictionary and returns errSecParam (-50).
+ * Kotlin/Native cannot `as? NSString` the Security `CFStringRef` constants
+ * (`kSecClass`, …) — that was "missing security attribute key". Use the
+ * documented SecItem string keys instead; they are what those CFSTR()s are.
+ *
+ * @see https://developer.apple.com/documentation/security/ksecclass
  */
 @OptIn(ExperimentalForeignApi::class)
 class KeychainSecureStore(
@@ -48,14 +40,33 @@ class KeychainSecureStore(
     override suspend fun put(alias: String, secret: String) {
         val data = (secret as NSString).dataUsingEncoding(NSUTF8StringEncoding)
             ?: error("Keychain put failed: could not encode secret")
-        delete(alias)
-        val status = add(alias, data)
-        if (status == errSecSuccess || status == errSecDuplicateItem) return
-        error(secMessage("put", status))
+        when (val added = SecItemAdd(addQuery(alias, data).asCf(), null)) {
+            errSecSuccess -> return
+            errSecDuplicateItem -> {
+                val updated = SecItemUpdate(baseQuery(alias).asCf(), updateAttrs(data).asCf())
+                if (updated == errSecSuccess) return
+                error(secMessage("update", updated))
+            }
+            else -> {
+                delete(alias)
+                val retry = SecItemAdd(addQuery(alias, data).asCf(), null)
+                if (retry == errSecSuccess || retry == errSecDuplicateItem) return
+                error(secMessage("put", retry))
+            }
+        }
     }
 
     override suspend fun get(alias: String): String? = runCatching {
-        memScopedGet(alias)
+        val query = baseQuery(alias)
+        query.setObject(NSNumber.numberWithBool(true), forKey = KEY_RETURN_DATA)
+        query.setObject(VAL_MATCH_ONE, forKey = KEY_MATCH_LIMIT)
+        memScoped {
+            val out = alloc<CFTypeRefVar>()
+            val status = SecItemCopyMatching(query.asCf(), out.ptr)
+            if (status == errSecItemNotFound || status != errSecSuccess) return@memScoped null
+            val data = out.value as? NSData ?: return@memScoped null
+            data.utf8String()
+        }
     }.getOrNull()
 
     override suspend fun delete(alias: String) {
@@ -65,38 +76,40 @@ class KeychainSecureStore(
         }
     }
 
-    private fun add(alias: String, data: NSData): Int {
-        val query = baseQuery(alias)
-        query.setObject(data, forKey = nsKey(kSecValueData))
-        query.setObject(kSecAttrAccessibleAfterFirstUnlock as Any, forKey = nsKey(kSecAttrAccessible))
-        return SecItemAdd(query.asCf(), null)
-    }
-
-    private fun memScopedGet(alias: String): String? {
-        val query = baseQuery(alias)
-        query.setObject(kCFBooleanTrue as Any, forKey = nsKey(kSecReturnData))
-        query.setObject(kSecMatchLimitOne as Any, forKey = nsKey(kSecMatchLimit))
-        return memScoped {
-            val out = alloc<CFTypeRefVar>()
-            val status = SecItemCopyMatching(query.asCf(), out.ptr)
-            if (status == errSecItemNotFound || status != errSecSuccess) return@memScoped null
-            val data = out.value as? NSData ?: return@memScoped null
-            data.utf8String()
-        }
-    }
-
     private fun baseQuery(alias: String): NSMutableDictionary {
         val query = NSMutableDictionary()
-        query.setObject(kSecClassGenericPassword as Any, forKey = nsKey(kSecClass))
-        query.setObject(service, forKey = nsKey(kSecAttrService))
-        query.setObject(alias, forKey = nsKey(kSecAttrAccount))
+        query.setObject(VAL_GENERIC_PASSWORD, forKey = KEY_CLASS)
+        query.setObject(service, forKey = KEY_SERVICE)
+        query.setObject(alias, forKey = KEY_ACCOUNT)
         return query
+    }
+
+    private fun addQuery(alias: String, data: NSData): NSMutableDictionary {
+        val query = baseQuery(alias)
+        query.setObject(data, forKey = KEY_VALUE_DATA)
+        query.setObject(VAL_AFTER_FIRST_UNLOCK, forKey = KEY_ACCESSIBLE)
+        return query
+    }
+
+    private fun updateAttrs(data: NSData): NSMutableDictionary {
+        val attrs = NSMutableDictionary()
+        attrs.setObject(data, forKey = KEY_VALUE_DATA)
+        attrs.setObject(VAL_AFTER_FIRST_UNLOCK, forKey = KEY_ACCESSIBLE)
+        return attrs
     }
 }
 
-@OptIn(ExperimentalForeignApi::class)
-private fun nsKey(ref: CFStringRef?): NSString =
-    ref as? NSString ?: error("missing Security attribute key")
+// SecItem.h CFSTR values — NSString keys work with NSMutableDictionary on KN.
+private const val KEY_CLASS = "class"
+private const val KEY_SERVICE = "svce"
+private const val KEY_ACCOUNT = "acct"
+private const val KEY_VALUE_DATA = "v_Data"
+private const val KEY_ACCESSIBLE = "pdmn"
+private const val KEY_RETURN_DATA = "r_Data"
+private const val KEY_MATCH_LIMIT = "m_Limit"
+private const val VAL_GENERIC_PASSWORD = "genp"
+private const val VAL_AFTER_FIRST_UNLOCK = "ck"
+private const val VAL_MATCH_ONE = "m_LimitOne"
 
 @OptIn(ExperimentalForeignApi::class)
 private fun NSMutableDictionary.asCf(): CFDictionaryRef? = this as CFDictionaryRef?
