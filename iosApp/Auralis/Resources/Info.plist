@@ -7,15 +7,17 @@
     <key>CFBundleDisplayName</key>
     <string>Auralis</string>
     <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
+    <string>Auralis</string>
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>$(PRODUCT_NAME)</string>
+    <string>Auralis</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>MinimumOSVersion</key>
+    <string>17.0</string>
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
