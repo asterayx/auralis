@@ -38,6 +38,7 @@ import com.auralis.store.InMemorySettingsStore
 import com.auralis.store.SessionRepository
 import com.auralis.store.SettingsStore
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,7 +62,11 @@ class AuralisApp(
 ) {
     private val factory = ProviderFactory(http)
     val tester = ConnectivityTester(http)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            println("AuralisApp: ${throwable.message ?: throwable.toString()}")
+        },
+    )
     private var audioJob: Job? = null
 
     private val _settings = MutableStateFlow(AppSettings())
@@ -81,7 +86,10 @@ class AuralisApp(
         val trimmed = key.trim()
         val stored = secrets.get(secretAlias(endpointId)).orEmpty()
         if (trimmed.isNotBlank()) {
-            secrets.put(secretAlias(endpointId), trimmed)
+            runCatching { secrets.put(secretAlias(endpointId), trimmed) }
+                .onFailure {
+                    return ConnectivityResult(false, it.message ?: "Keychain write failed.")
+                }
         }
         val endpoint = _settings.value.endpoints.first { it.id == endpointId }
         val toUse = trimmed.ifBlank { stored }
@@ -91,13 +99,15 @@ class AuralisApp(
     suspend fun hasKey(endpointId: String): Boolean {
         val endpoint = _settings.value.endpoints.firstOrNull { it.id == endpointId } ?: return false
         if (endpoint.kind == ProviderKind.DEMO) return true
-        return !secrets.get(secretAlias(endpointId)).isNullOrBlank()
+        return runCatching { !secrets.get(secretAlias(endpointId)).isNullOrBlank() }.getOrDefault(false)
     }
 
     suspend fun configuredEndpointIds(): Set<String> =
-        _settings.value.endpoints.mapNotNull { endpoint ->
-            if (hasKey(endpoint.id)) endpoint.id else null
-        }.toSet()
+        runCatching {
+            _settings.value.endpoints.mapNotNull { endpoint ->
+                if (hasKey(endpoint.id)) endpoint.id else null
+            }.toSet()
+        }.getOrDefault(emptySet())
 
     suspend fun probeModels(endpointId: String, keyDraft: String = ""): ConnectivityResult {
         val endpoint = _settings.value.endpoints.firstOrNull { it.id == endpointId }

@@ -24,8 +24,12 @@ import com.auralis.store.AppSettings
 import com.auralis.store.FileTextStore
 import com.auralis.store.JsonSessionRepository
 import com.auralis.store.JsonSettingsStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -38,7 +42,11 @@ class AppleAuralis internal constructor(
     val app: AuralisApp,
     val audio: AppleAudioBridge,
 ) {
-    private val scope = MainScope()
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            println("AppleAuralis: ${throwable.message ?: throwable.toString()}")
+        },
+    )
     private val library = LibraryController(app)
     private var live: SessionPipeline? = null
     private var liveWatch: Job? = null
@@ -49,15 +57,29 @@ class AppleAuralis internal constructor(
     fun watchSettings(onChange: (AppleSettingsSnapshot) -> Unit) {
         settingsListener = onChange
         settingsWatch?.cancel()
-        settingsWatch = scope.launch {
-            app.settings.collect { emitSettings() }
+        settingsWatch = launchSafe {
+            app.settings.collect {
+                runCatching { emitSettings() }
+            }
         }
     }
 
     private suspend fun emitSettings() {
         val listener = settingsListener ?: return
-        listener(app.settings.value.toSnapshot(app.configuredEndpointIds()))
+        val configured = runCatching { app.configuredEndpointIds() }.getOrDefault(emptySet())
+        listener(app.settings.value.toSnapshot(configured))
     }
+
+    private fun launchSafe(block: suspend CoroutineScope.() -> Unit): Job =
+        scope.launch {
+            try {
+                block()
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                println("AppleAuralis: ${t.message ?: t.toString()}")
+            }
+        }
 
     fun close() {
         settingsWatch?.cancel()
@@ -68,7 +90,7 @@ class AppleAuralis internal constructor(
     }
 
     fun load(onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             runCatching { app.load() }.fold(
                 onSuccess = { onDone(null) },
                 onFailure = { onDone(it.message ?: "load failed") },
@@ -81,14 +103,16 @@ class AppleAuralis internal constructor(
         onSnapshot: (AppleLiveSnapshot) -> Unit,
         onReady: (String?) -> Unit,
     ) {
-        scope.launch {
+        launchSafe {
             runCatching {
                 liveWatch?.cancel()
                 val mode = if (translator) SessionMode.TRANSLATOR else SessionMode.SCRIBE
                 val pipe = app.startLive(mode)
                 live = pipe
-                liveWatch = scope.launch {
-                    pipe.state.collect { onSnapshot(it.toLiveSnapshot()) }
+                liveWatch = launchSafe {
+                    pipe.state.collect {
+                        runCatching { onSnapshot(it.toLiveSnapshot()) }
+                    }
                 }
             }.fold(
                 onSuccess = { onReady(null) },
@@ -98,35 +122,40 @@ class AppleAuralis internal constructor(
     }
 
     fun finishLive(onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             val pipe = live
             liveWatch?.cancel()
             liveWatch = null
             live = null
             if (pipe == null) {
                 onDone(null)
-                return@launch
+                return@launchSafe
             }
             runCatching { app.finishLive(pipe) }.report(onDone)
         }
     }
 
     fun saveKey(endpointId: String, key: String, onDone: (AppleProbeResult) -> Unit) {
-        scope.launch {
-            val result = app.saveKey(endpointId, key)
-            emitSettings()
-            onDone(result.toProbe())
+        launchSafe {
+            val result = runCatching {
+                val saved = app.saveKey(endpointId, key)
+                runCatching { emitSettings() }
+                saved.toProbe()
+            }.getOrElse { AppleProbeResult(false, it.message ?: "saveKey failed", emptyList()) }
+            onDone(result)
         }
     }
 
     fun probeModels(endpointId: String, key: String, onDone: (AppleProbeResult) -> Unit) {
-        scope.launch {
-            onDone(app.probeModels(endpointId, key).toProbe())
+        launchSafe {
+            val result = runCatching { app.probeModels(endpointId, key).toProbe() }
+                .getOrElse { AppleProbeResult(false, it.message ?: "probe failed", emptyList()) }
+            onDone(result)
         }
     }
 
     fun updateEndpoint(endpointId: String, baseUrl: String, model: String, onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             runCatching { app.updateEndpoint(endpointId, baseUrl = baseUrl, model = model) }.report(onDone)
         }
     }
@@ -138,7 +167,7 @@ class AppleAuralis internal constructor(
         postProcessId: String,
         onDone: (String?) -> Unit,
     ) {
-        scope.launch {
+        launchSafe {
             runCatching { app.setProfileSlots(profileId, sttId, translationId, postProcessId) }.report(onDone)
         }
     }
@@ -152,13 +181,13 @@ class AppleAuralis internal constructor(
     }
 
     fun setVocabulary(csv: String, onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             runCatching { app.setVocabulary(csv.split(',', '，', '\n')) }.report(onDone)
         }
     }
 
     fun setGlossary(text: String, onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             runCatching {
                 app.setGlossary(
                     text.lineSequence().mapNotNull { line ->
@@ -197,7 +226,7 @@ class AppleAuralis internal constructor(
         persist({ it.copy(recordingConsent = value) }, onDone)
 
     fun saveTemplate(name: String, prompt: String, onDone: (String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             runCatching {
                 app.saveTemplate(
                     PromptTemplate(
@@ -212,26 +241,26 @@ class AppleAuralis internal constructor(
     }
 
     fun deleteTemplate(id: String, onDone: (String?) -> Unit) {
-        scope.launch { runCatching { app.deleteTemplate(id) }.report(onDone) }
+        launchSafe { runCatching { app.deleteTemplate(id) }.report(onDone) }
     }
 
     fun setDefaultTemplate(id: String, onDone: (String?) -> Unit) {
-        scope.launch { runCatching { app.setDefaultTemplate(id) }.report(onDone) }
+        launchSafe { runCatching { app.setDefaultTemplate(id) }.report(onDone) }
     }
 
     fun listSessions(query: String, onDone: (List<AppleSessionRow>) -> Unit) {
-        scope.launch {
+        launchSafe {
             library.refresh(query)
             onDone(library.state.value.sessions.map { it.toRow() })
         }
     }
 
     fun getSession(id: String, onDone: (AppleSessionDetail?) -> Unit) {
-        scope.launch { onDone(app.sessions.get(id)?.toDetail()) }
+        launchSafe { onDone(app.sessions.get(id)?.toDetail()) }
     }
 
     fun postProcess(sessionId: String, templateId: String, onDone: (String?, String?) -> Unit) {
-        scope.launch {
+        launchSafe {
             val template = app.settings.value.templates.firstOrNull { it.id == templateId }
                 ?: app.defaultTemplate()
             runCatching { app.postProcess(sessionId, template) }.fold(
@@ -242,15 +271,15 @@ class AppleAuralis internal constructor(
     }
 
     fun edit(sessionId: String, segmentId: String, text: String, onDone: (String?) -> Unit) {
-        scope.launch { runCatching { app.edit(sessionId, segmentId, text) }.report(onDone) }
+        launchSafe { runCatching { app.edit(sessionId, segmentId, text) }.report(onDone) }
     }
 
     fun renameSpeaker(sessionId: String, speakerId: String, name: String, onDone: (String?) -> Unit) {
-        scope.launch { runCatching { app.renameSpeaker(sessionId, speakerId, name) }.report(onDone) }
+        launchSafe { runCatching { app.renameSpeaker(sessionId, speakerId, name) }.report(onDone) }
     }
 
     fun exportOpen(sessionId: String, markdown: Boolean, onDone: (String) -> Unit) {
-        scope.launch {
+        launchSafe {
             val bundle = app.sessions.get(sessionId)
             onDone(
                 if (bundle == null) ""
@@ -260,9 +289,9 @@ class AppleAuralis internal constructor(
     }
 
     fun seekLabel(sessionId: String, segmentId: String, onDone: (String?) -> Unit) {
-        scope.launch {
-            val bundle = app.sessions.get(sessionId) ?: return@launch onDone(null)
-            val segment = bundle.segments.firstOrNull { it.id == segmentId } ?: return@launch onDone(null)
+        launchSafe {
+            val bundle = app.sessions.get(sessionId) ?: return@launchSafe onDone(null)
+            val segment = bundle.segments.firstOrNull { it.id == segmentId } ?: return@launchSafe onDone(null)
             val stamp = formatTimestamp(segment.startMs)
             onDone(
                 if (bundle.session.audioPath.isNullOrBlank()) {
@@ -284,7 +313,7 @@ class AppleAuralis internal constructor(
     fun qualityProfileId(): String = Presets.qualityMeeting.id
 
     private fun persist(transform: (AppSettings) -> AppSettings, onDone: (String?) -> Unit) {
-        scope.launch { runCatching { app.persist(transform) }.report(onDone) }
+        launchSafe { runCatching { app.persist(transform) }.report(onDone) }
     }
 
     companion object {

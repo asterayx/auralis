@@ -2,6 +2,7 @@ package com.auralis.app
 
 import com.auralis.provider.InMemorySecureStore
 import com.auralis.provider.Presets
+import com.auralis.provider.SecureStore
 import com.auralis.provider.secretAlias
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -80,5 +81,21 @@ class KernelClientContractTest {
         assertTrue(app.hasKey(Presets.demoStt.id))
         secrets.put(secretAlias(Presets.soniox.id), "sk-test")
         assertTrue(app.hasKey(Presets.soniox.id))
+    }
+
+    @Test
+    fun saveKeyPutFailureIsConnectivityError() = runBlocking {
+        val secrets = object : SecureStore {
+            override suspend fun put(alias: String, secret: String) {
+                error("Keychain put failed: errSecParam (-50). Invalid item attributes.")
+            }
+            override suspend fun get(alias: String): String? = null
+            override suspend fun delete(alias: String) = Unit
+        }
+        val app = AuralisApp(secrets = secrets)
+        app.load()
+        val result = app.saveKey(Presets.soniox.id, "sk-test")
+        assertTrue(!result.ok)
+        assertTrue(result.message.contains("-50") || result.message.contains("Keychain"))
     }
 }
